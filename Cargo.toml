@@ -1,0 +1,22 @@
+[package]
+name = "entviz"
+version = "0.1.0"
+edition = "2021"
+description = "Visualize high-entropy values as comparable SVG diagrams (entviz, spec v6)."
+license = "MIT"
+repository = "https://github.com/dhh1128/entviz-rs"
+keywords = ["entropy", "fingerprint", "svg", "visualization"]
+categories = ["visualization", "cryptography"]
+
+[dependencies]
+sha2 = "0.10"        # SHA-512 fingerprint
+base64 = "0.22"      # base64url (no pad) for ftok tokenization
+hex = "0.4"          # digest hex for the clip-path salt + middle cells
+
+[[bin]]
+name = "entviz-conformance"
+path = "src/main.rs"
+
+[lib]
+name = "entviz"
+path = "src/lib.rs"
