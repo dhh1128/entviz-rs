@@ -22,7 +22,7 @@ use base64::Engine;
 use sha2::{Digest, Sha512};
 use std::collections::BTreeMap;
 
-pub const SPEC_VERSION: &str = "v6";
+pub const SPEC_VERSION: &str = "v7";
 
 // --------------------------------------------------------------------------
 // Alphabets

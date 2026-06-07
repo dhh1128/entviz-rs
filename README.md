@@ -1,6 +1,6 @@
 # entviz-rs
 
-Rust implementation of [entviz](https://github.com/dhh1128/entviz) (spec **v6**)
+Rust implementation of [entviz](https://github.com/dhh1128/entviz) (spec **v7**)
 — visualize high-entropy values as comparable SVG diagrams.
 
 ## ⚠️ Status: unverified scaffold (blocked on toolchain)
