@@ -22,7 +22,9 @@ use base64::Engine;
 use sha2::{Digest, Sha512};
 use std::collections::BTreeMap;
 
-pub const SPEC_VERSION: &str = "v7";
+pub const SPEC_VERSION: &str = "v9";
+
+pub mod model;
 
 // --------------------------------------------------------------------------
 // Alphabets
