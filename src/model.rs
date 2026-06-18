@@ -103,6 +103,92 @@ pub struct RenderModel {
     pub ellipse: Option<Ellipse>,
 }
 
+impl RenderModel {
+    /// Serialize to a `serde_json::Value` matching the Python golden
+    /// `compliance/corpus/<name>/model.json` schema, restricted to the fields
+    /// this render-model layer computes (everything except the label channel —
+    /// `labels` / `user_note`, which depend on the parser and are out of scope
+    /// for the grinder's feature vector). The differential harness loads the
+    /// golden, drops those two keys, and diffs field-for-field. Continuous
+    /// ellipse params are rounded to 3 digits to match the golden's
+    /// `ELLIPSE_NDIGITS` equivalence.
+    pub fn to_golden_json(&self) -> serde_json::Value {
+        use serde_json::{json, Map, Value};
+
+        let round3 = |x: f64| (x * 1000.0).round() / 1000.0;
+
+        let mut cells = Map::new();
+        for c in &self.cells {
+            let v = if c.blank {
+                let mut m = json!({
+                    "blank": true,
+                    "blank_map": c.blank_map,
+                    "col": c.col,
+                    "row": c.row,
+                    "fingerprint": c.fingerprint,
+                    "quartile": Value::Null,
+                });
+                if c.blank_map {
+                    let (mnr, mnc) = c.map_min.unwrap();
+                    let (mxr, mxc) = c.map_max.unwrap();
+                    m["map_min"] = json!([mnr, mnc]);
+                    m["map_max"] = json!([mxr, mxc]);
+                }
+                m
+            } else {
+                json!({
+                    "blank": false,
+                    "blank_map": false,
+                    "col": c.col,
+                    "row": c.row,
+                    "fingerprint": c.fingerprint,
+                    "edge_color": c.edge_color,
+                    "fg": c.fg,
+                    "nucleus_bg": c.nucleus_bg,
+                    "quartile": c.quartile,
+                    "surround_bits": c.surround_bits,
+                    "text": c.text,
+                    "text_size_px": c.text_size_px.map(round3),
+                })
+            };
+            cells.insert(c.index.to_string(), v);
+        }
+
+        let color_bar: Vec<Value> = self
+            .color_bar
+            .iter()
+            .map(|b| json!({"band": b.band, "letter": b.letter, "rank": b.rank}))
+            .collect();
+
+        let ellipse = match &self.ellipse {
+            Some(e) => json!({
+                "anchor": [round3(e.anchor.0), round3(e.anchor.1)],
+                "rotation": round3(e.rotation),
+                "rx": round3(e.rx),
+                "ry": round3(e.ry),
+            }),
+            None => Value::Null,
+        };
+
+        json!({
+            "spec_version": self.spec_version,
+            "cols": self.cols,
+            "rows": self.rows,
+            "bg_color": self.bg_color,
+            "input_bytes": self.input_bytes,
+            "truncated": self.truncated,
+            "cells": Value::Object(cells),
+            "color_bar": color_bar,
+            "color_bar_markers": {
+                "left": self.color_bar_markers.left,
+                "right": self.color_bar_markers.right,
+                "slots": self.color_bar_markers.slots,
+            },
+            "ellipse": ellipse,
+        })
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum ModelError {
     /// Normalized core exceeds 512 bits — the large-input path is not yet ported.
@@ -231,6 +317,25 @@ pub fn compute_render_model(
     bottom_strip: bool,
     raw_bytes: usize,
 ) -> Result<RenderModel, ModelError> {
+    compute_render_model_fp(core, core, alphabet, target_ar, font_pt, bottom_strip, raw_bytes)
+}
+
+/// Like [`compute_render_model`] but with a distinct `fingerprint_core` — the
+/// string the PRIMARY fingerprint is computed over. For most inputs it equals
+/// `core`; for a SEMANTIC-prefix type (SWHID, gitoid) the Python pipeline folds
+/// the prefix in (`fingerprint_core = prefix ‖ core`) so two values differing
+/// only in their type code avalanche apart across every fingerprint-driven
+/// channel. The cell text still tokenizes `core`, and the `second`/marker digest
+/// stays over plain `core`. See pipeline.py:195 and this.i:s3mpr3fx.
+pub fn compute_render_model_fp(
+    core: &str,
+    fingerprint_core: &str,
+    alphabet: &Alphabet,
+    target_ar: f64,
+    font_pt: f64,
+    bottom_strip: bool,
+    raw_bytes: usize,
+) -> Result<RenderModel, ModelError> {
     if core.is_empty() {
         return Err(ModelError::Empty);
     }
@@ -243,7 +348,7 @@ pub fn compute_render_model(
     let tokens = tokenize(core, alphabet);
     let token_count = tokens.len();
 
-    let primary = compute_fingerprint(core);
+    let primary = compute_fingerprint(fingerprint_core);
     let ftoks_all = tokenize_fingerprint(&primary);
     let used_ftoks: Vec<Token> = ftoks_all.into_iter().take(token_count).collect();
     let second = second_digest(core);
@@ -273,8 +378,12 @@ pub fn compute_render_model(
     let grid_top = 1.0 + gm + nucleus_h;
 
     // --- Per-cell text size (per alphabet for short inputs) ---
+    // 4-bit alphabets (hex/decimal) render 6-char tokens at 0.75×, rounded to a
+    // whole point. Python's `round()` is round-half-to-even, so `font_pt=6`
+    // gives `round(4.5)=4`, NOT 5 — use `round_ties_even` to match the
+    // reference (a plain `.round()` half-away-from-zero diverges on fs-6).
     let text_pt = if alphabet.bits_per_char == 4 {
-        (font_pt * 0.75).round()
+        (font_pt * 0.75).round_ties_even()
     } else {
         font_pt
     };
@@ -536,6 +645,16 @@ mod tests {
         assert!((e.rx - 37.335).abs() < 0.01, "rx={}", e.rx);
         assert!((e.ry - 57.7).abs() < 0.05, "ry={}", e.ry);
         assert!((e.rotation - 12.0).abs() < 1e-6, "rot={}", e.rotation);
+    }
+
+    #[test]
+    fn fs6_text_size_uses_banker_rounding() {
+        // font_pt=6, hex (4-bit) → text_pt = round(6*0.75) = round(4.5). Python's
+        // round-half-to-even yields 4 (→ 4*96/72 = 5.333px), NOT 5. Pins the
+        // round_ties_even fix the differential harness caught on the fs-6 vector.
+        let m = compute_render_model(&hex256_core(), &HEX, 1.0, 6.0, false, 64).unwrap();
+        let px = m.cells[0].text_size_px.unwrap();
+        assert!((px - 4.0 * 96.0 / 72.0).abs() < 1e-9, "text_size_px={px}");
     }
 
     #[test]
