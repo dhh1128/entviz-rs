@@ -19,9 +19,8 @@
 //! }
 //! ```
 //!
-//! On a >512-bit (large) input the model layer returns `LargeInputUnsupported`;
-//! this binary exits 3 with a message so the harness can mark it deferred
-//! rather than failed. Any other error exits 2.
+//! Both the short and large (>512-bit head/middle/tail) paths are supported.
+//! An empty/unmodelable core exits 2.
 
 use std::io::Read;
 
@@ -71,9 +70,6 @@ fn main() {
     {
         Ok(model) => {
             println!("{}", model.to_golden_json());
-        }
-        Err(ModelError::LargeInputUnsupported) => {
-            fail(3, "large input (>512 bits) — render-model path not yet ported")
         }
         Err(ModelError::Empty) => fail(2, "empty core"),
     }

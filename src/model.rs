@@ -5,8 +5,9 @@
 //!
 //! This is the half of entviz the adversarial grinder cares about: every
 //! fingerprint-driven channel a human can check is a discrete field here, and
-//! each is `f(SHA-512(core))`. Large-input (>512-bit) head/middle/tail handling
-//! is **not yet ported** — `compute_render_model` returns `Err` for it.
+//! each is `f(SHA-512(core))`. Both the short and the large-input (>512-bit)
+//! head + fingerprint-middle + tail paths are ported and verified against the
+//! Python golden corpus by entviz-adversarial/oracle/diff_harness.py.
 //!
 //! Ground truth: `/home/daniel/code/entviz/compliance/corpus/<name>/model.json`.
 
@@ -33,6 +34,63 @@ pub fn second_digest(core: &str) -> [u8; 64] {
     let mut d = [0u8; 64];
     d.copy_from_slice(&out);
     d
+}
+
+/// Encode a 24-bit value as 5 lowercase Crockford base32 chars (v9 middle-cell
+/// readout). Mirrors `entropy._crockford5`: high-order first, single-case,
+/// homoglyph-clean (Crockford omits i/l/o/u). Injective since 32^5 ≥ 2^24.
+fn crockford5(quant: u32) -> String {
+    const C: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+    let mut out = [0u8; 5];
+    let mut v = quant;
+    for i in 0..5 {
+        out[4 - i] = C[(v & 0x1F) as usize];
+        v >>= 5;
+    }
+    String::from_utf8(out.to_vec()).unwrap().to_lowercase()
+}
+
+/// Build the 20 renumbered tokens for a large (>512-bit) input: 8 head tokens
+/// (first `8·token_len` chars of `core`), 4 middle tokens (each a Crockford-5
+/// readout of 24 bits of the domain-separated `second` digest — neutral bg,
+/// painted by the pipeline), and 8 tail tokens (last `8·token_len` chars).
+/// Mirrors `entropy.tokenize_entropy`'s large path + `_build_fingerprint_middle_tokens`.
+fn build_large_tokens(core: &str, alphabet: &Alphabet, token_len: usize) -> Vec<Token> {
+    let chars: Vec<char> = core.chars().collect();
+    let window = 8 * token_len;
+    let head: String = chars[..window.min(chars.len())].iter().collect();
+    let tail_start = chars.len().saturating_sub(window);
+    let tail: String = chars[tail_start..].iter().collect();
+    let head_tokens = tokenize(&head, alphabet);
+    let tail_tokens = tokenize(&tail, alphabet);
+
+    let second = second_digest(core);
+    let mut combined: Vec<Token> = Vec::with_capacity(20);
+    combined.extend(head_tokens);
+    for i in 0..4 {
+        let quant = ((second[3 * i] as u32) << 16)
+            | ((second[3 * i + 1] as u32) << 8)
+            | (second[3 * i + 2] as u32);
+        combined.push(Token { text: crockford5(quant), index: i, quant });
+    }
+    combined.extend(tail_tokens);
+    // Renumber 0..19 (head 0..7, middle 8..11, tail 12..19).
+    combined
+        .into_iter()
+        .enumerate()
+        .map(|(i, t)| Token { text: t.text, index: i, quant: t.quant })
+        .collect()
+}
+
+/// Foreground (text) color for a cell painted with the neutral entviz-bg color
+/// (the fingerprint-middle cells). Re-derives via the Oklab contrast rule on
+/// the bg color's own quant, exactly as `Renderer.render_nucleus` does under a
+/// `bg_override`.
+fn fg_for_bg(bg_hex: &str) -> String {
+    let r = u32::from_str_radix(&bg_hex[1..3], 16).unwrap();
+    let g = u32::from_str_radix(&bg_hex[3..5], 16).unwrap();
+    let b = u32::from_str_radix(&bg_hex[5..7], 16).unwrap();
+    nucleus_colors(r | (g << 8) | (b << 16)).1
 }
 
 fn band_letter(color: &str) -> Option<&'static str> {
@@ -191,8 +249,6 @@ impl RenderModel {
 
 #[derive(Debug, PartialEq)]
 pub enum ModelError {
-    /// Normalized core exceeds 512 bits — the large-input path is not yet ported.
-    LargeInputUnsupported,
     Empty,
 }
 
@@ -340,12 +396,16 @@ pub fn compute_render_model_fp(
         return Err(ModelError::Empty);
     }
     let token_len = (24 / alphabet.bits_per_char) as usize;
-    let token_count = (core.chars().count() + token_len - 1) / token_len; // ceil
-    if token_count > 22 || core_byte_length(core, alphabet) > 64 {
-        return Err(ModelError::LargeInputUnsupported);
-    }
+    let est_token_count = (core.chars().count() + token_len - 1) / token_len; // ceil
+    // v6 large-input trigger: >512 bits (>64 bytes) OR >22 tokens. The large
+    // path renders 8 head + 4 fingerprint-middle + 8 tail tokens (20 total).
+    let is_truncated = est_token_count > 22 || core_byte_length(core, alphabet) > 64;
 
-    let tokens = tokenize(core, alphabet);
+    let tokens = if is_truncated {
+        build_large_tokens(core, alphabet, token_len)
+    } else {
+        tokenize(core, alphabet)
+    };
     let token_count = tokens.len();
 
     let primary = compute_fingerprint(fingerprint_core);
@@ -353,7 +413,9 @@ pub fn compute_render_model_fp(
     let used_ftoks: Vec<Token> = ftoks_all.into_iter().take(token_count).collect();
     let second = second_digest(core);
 
-    let grid = choose_grid(token_count, target_ar);
+    // Large inputs choose the grid as if for 22 tokens (4×6 at AR 1.0) so the
+    // blank-shift has slack, even though only 20 cells carry tokens.
+    let grid = choose_grid(if is_truncated { 22 } else { token_count }, target_ar);
     let median = median_token(&used_ftoks);
     let quartiles = quartile_tokens(&used_ftoks);
     let style = select_visual_style(median.as_ref().expect("non-empty"));
@@ -388,6 +450,10 @@ pub fn compute_render_model_fp(
         font_pt
     };
     let text_size_px = text_pt * 96.0 / 72.0;
+    // The v9 fingerprint-middle cells always render 5 Crockford chars, so they
+    // use the 5-char (0.80×) size regardless of the input alphabet (round-to-even
+    // to match Python's `round`). Only consulted on large inputs.
+    let fp_middle_text_px = (font_pt * 0.80).round_ties_even() * 96.0 / 72.0;
 
     // --- min/max ftok cells (for the blank-cell map) ---
     // min: smallest quant, tie-break highest cell index; max: largest quant, tie highest cell idx.
@@ -437,21 +503,33 @@ pub fn compute_render_model_fp(
         let row = ci / grid.cols;
         if let Some(&t_idx) = token_of_cell.get(&ci) {
             let token = &tokens[t_idx];
-            let (bg, fg) = nucleus_colors(token.quant);
-            let edge = closest_palette_color(&bg, &edge_palette).to_string();
+            // v6 fingerprint-middle cells (large inputs, token indices 8..=11):
+            // neutral entviz-bg nucleus (no entropy in the bg), gold/white frame,
+            // 0.80× Crockford text — surround stays ftok-driven.
+            let is_fp_middle = is_truncated && (8..=11).contains(&token.index);
+            let (bg, fg, edge, tsize) = if is_fp_middle {
+                let bg = style.bg_color.clone();
+                let edge = closest_palette_color(&bg, &edge_palette).to_string();
+                let fg = fg_for_bg(&bg);
+                (bg, fg, edge, fp_middle_text_px)
+            } else {
+                let (bg, fg) = nucleus_colors(token.quant);
+                let edge = closest_palette_color(&bg, &edge_palette).to_string();
+                (bg, fg, edge, text_size_px)
+            };
             cells.push(CellModel {
                 index: ci,
                 col,
                 row,
                 blank: false,
                 blank_map: false,
-                fingerprint: false,
+                fingerprint: is_fp_middle,
                 text: Some(token.text.clone()),
                 nucleus_bg: Some(bg),
                 fg: Some(fg),
                 edge_color: Some(edge),
                 surround_bits: Some(used_ftoks[t_idx].quant),
-                text_size_px: Some(text_size_px),
+                text_size_px: Some(tsize),
                 quartile: quartile_of_cell.get(&ci).copied(),
                 map_min: None,
                 map_max: None,
@@ -562,7 +640,7 @@ pub fn compute_render_model_fp(
         rows: grid.rows,
         bg_color: style.bg_color,
         input_bytes,
-        truncated: false,
+        truncated: is_truncated,
         cells,
         color_bar,
         color_bar_markers: markers,
@@ -658,12 +736,18 @@ mod tests {
     }
 
     #[test]
-    fn large_input_rejected() {
-        let big = "ab".repeat(200); // 400 hex chars = 200 bytes > 64
-        assert_eq!(
-            compute_render_model(&big, &HEX, 1.0, 12.0, false, 400),
-            Err(ModelError::LargeInputUnsupported)
-        );
+    fn large_input_truncates() {
+        let big = "ab".repeat(200); // 400 hex chars = 200 bytes > 64 → large path
+        let m = compute_render_model(&big, &HEX, 1.0, 12.0, false, 200).unwrap();
+        assert!(m.truncated);
+        assert_eq!((m.cols, m.rows), (4, 6));
+        // Exactly 4 fingerprint-middle cells, each a 5-char Crockford readout.
+        let fp: Vec<&CellModel> = m.cells.iter().filter(|c| c.fingerprint).collect();
+        assert_eq!(fp.len(), 4);
+        for c in fp {
+            assert_eq!(c.text.as_ref().unwrap().chars().count(), 5);
+            assert_eq!(c.nucleus_bg.as_deref(), Some(m.bg_color.as_str()));
+        }
     }
 
     // Second golden vector: compliance/corpus/text-hello, input "hello world"
