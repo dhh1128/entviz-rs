@@ -32,7 +32,7 @@ exclude = [
 adversarial = []
 
 [dependencies]
-sha2 = "0.10"        # SHA-512 fingerprint
+sha2 = "0.11"        # SHA-512 fingerprint
 base64 = "0.22"      # base64url (no pad) for ftok tokenization
 hex = "0.4"          # digest hex for the clip-path salt + middle cells
 serde_json = "1"     # conformance CLI stdin parsing (+ the render-model oracle)
