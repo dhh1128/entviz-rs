@@ -24,8 +24,8 @@
 
 use std::io::Read;
 
-use entviz::model::{compute_render_model_fp, ModelError};
-use entviz::Alphabet;
+use entviz::model::{color_field, compute_render_model_fp, ModelError};
+use entviz::{Alphabet, POSSIBLE_EDGE_COLORS};
 
 fn fail(code: i32, msg: &str) -> ! {
     eprintln!("entviz-render-model: {msg}");
@@ -65,6 +65,28 @@ fn main() {
         chars: Box::leak(chars.to_string().into_boxed_str()),
         bits_per_char: bits,
     };
+
+    // `--colorfield`: print the v10 colour-singleton field (bg + fingerprint-edge
+    // + blank-fill colours, as hex) instead of the full model, for golden-SVG
+    // validation of the blank-fill formula (the only colour channel the Tier-A
+    // oracle does not cover).
+    if std::env::args().any(|a| a == "--colorfield") {
+        let cf = color_field(core, fp_core, &alphabet, target_ar, font_pt, bottom_strip);
+        let hex = |i: u8| POSSIBLE_EDGE_COLORS.get(i as usize).copied().unwrap_or("?");
+        let pairs = |v: &[(usize, u8)]| {
+            v.iter()
+                .map(|&(ci, c)| format!("[{ci},\"{}\"]", hex(c)))
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        println!(
+            "{{\"bg\":\"{}\",\"fp_edge\":[{}],\"blank_fill\":[{}]}}",
+            hex(cf.bg),
+            pairs(&cf.fp_edge),
+            pairs(&cf.blank_fill),
+        );
+        return;
+    }
 
     match compute_render_model_fp(core, fp_core, &alphabet, target_ar, font_pt, bottom_strip, raw_bytes)
     {
