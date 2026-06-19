@@ -24,13 +24,14 @@ use std::collections::BTreeMap;
 
 pub const SPEC_VERSION: &str = "v10";
 
+pub mod entropy;
 pub mod keccak;
 pub mod model;
 
 // --------------------------------------------------------------------------
 // Alphabets
 // --------------------------------------------------------------------------
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct Alphabet {
     pub name: &'static str,
     pub chars: &'static str,
