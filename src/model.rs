@@ -667,6 +667,140 @@ pub fn compute_render_model_fp(
     })
 }
 
+// --------------------------------------------------------------------------
+// Channels — the lean casual-gestalt feature vector (the grinder's hot path)
+// --------------------------------------------------------------------------
+
+/// The "casual gestalt" feature vector: the channels a habituated glance checks,
+/// computed WITHOUT the per-cell `Vec` or JSON serialization. This is the
+/// adversarial grinder's hot path — two SHA-512s + an ftok median + a few dozen
+/// integer ops per candidate. Every field is a small integer so the match
+/// predicate is branch-free comparison. Pinned consistent with
+/// [`compute_render_model`] by the `channels_agree_with_model` test.
+///
+/// NOT yet modeled here (deliberately, until a persona needs them): the per-cell
+/// nucleus/edge field and the v10 blank-cell fills. The fingerprint-edge cells'
+/// colours and the blank fills are casually salient (that is the whole point of
+/// v10), so a persona that checks "the field of cell colours" will need them
+/// added — see entviz-adversarial/STATE.md.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Channels {
+    /// Index into [`POSSIBLE_EDGE_COLORS`] of the entviz background (0..=3).
+    pub bg: u8,
+    /// Count of each 2-bit pattern (0..3) across the 256 digest slices. Band
+    /// heights are `count^4`; the tallest band is `argmax` of this.
+    pub bar_counts: [u32; 4],
+    /// First-appearance order of the 4 patterns (rank 0 = top band).
+    pub bar_order: [u8; 4],
+    /// Color-bar markers: left slot, right slot, and slot count K.
+    pub marker_left: u8,
+    pub marker_right: u8,
+    pub marker_k: u8,
+    /// Ellipse silhouette as the discrete params that fully determine it given a
+    /// fixed grid+geometry: anchor index in the corner pool, and the rx/ry/rot
+    /// 0..15 steps. Two candidates with equal tuples have identical silhouettes.
+    pub ell_anchor: u16,
+    pub ell_rx: u8,
+    pub ell_ry: u8,
+    pub ell_rot: u8,
+}
+
+impl Channels {
+    /// Pattern id (0..3) of the dominant (tallest) color-bar band — the casual
+    /// "biggest stripe". argmax of `bar_counts`, tie-break to the lower pattern.
+    pub fn dominant_band(&self) -> u8 {
+        let mut best = 0usize;
+        for p in 1..4 {
+            if self.bar_counts[p] > self.bar_counts[best] {
+                best = p;
+            }
+        }
+        best as u8
+    }
+}
+
+/// Compute the lean [`Channels`] gestalt for a core. Mirrors the fingerprint-
+/// driven channels of [`compute_render_model`] (bg, color bar, markers, ellipse)
+/// but skips cell tokenization, per-cell assembly, and serialization. For a
+/// semantic-prefix grind, pass `fingerprint_core = prefix‖core`; else it equals
+/// `core`. `bottom_strip` only affects the marker slot count K.
+pub fn channels(
+    core: &str,
+    fingerprint_core: &str,
+    alphabet: &Alphabet,
+    target_ar: f64,
+    font_pt: f64,
+    bottom_strip: bool,
+) -> Channels {
+    let token_len = (24 / alphabet.bits_per_char) as usize;
+    let est_token_count = (core.chars().count() + token_len - 1) / token_len;
+    let is_truncated = est_token_count > 22 || core_byte_length(core, alphabet) > 64;
+    // Short: token_count == ceil(len/token_len). Large: always 20 (8+4+8). We
+    // never need the cell text here, only the count (for ftoks + grid).
+    let token_count = if is_truncated { 20 } else { est_token_count };
+
+    let primary = compute_fingerprint(fingerprint_core);
+    let ftoks_all = tokenize_fingerprint(&primary);
+    let used_ftoks: Vec<Token> = ftoks_all.into_iter().take(token_count).collect();
+    let median = median_token(&used_ftoks).expect("non-empty");
+    let bg = (median.quant & 0x03) as u8;
+
+    // Color bar.
+    let counts = two_bit_counts(&primary);
+    let mut bar_counts = [0u32; 4];
+    for p in 0..4 {
+        bar_counts[p] = counts[p] as u32;
+    }
+    let order = first_appearance_order(&primary);
+    let mut bar_order = [0u8; 4];
+    for (i, &p) in order.iter().enumerate() {
+        bar_order[i] = p as u8;
+    }
+
+    // Geometry for the marker slot count K (= clamp(floor(bar_height/12), 4, 16)).
+    let grid = choose_grid(if is_truncated { 22 } else { token_count }, target_ar);
+    let font_px = font_pt * 96.0 / 72.0;
+    let nucleus_h = font_px * 1.25;
+    let box_h = nucleus_h / 2.0;
+    let cell_h = nucleus_h + 2.0 * box_h;
+    let gm = box_h / 2.0;
+    let grid_h = cell_h * grid.rows as f64;
+    let bottom_region = if bottom_strip { nucleus_h + gm } else { gm };
+    let bounding_h = 1.0 + gm + nucleus_h + grid_h + bottom_region + 1.0;
+    let bar_height = bounding_h - 2.0;
+    let k = ((bar_height / 12.0).floor() as i64).clamp(4, 16) as usize;
+    let second = second_digest(core);
+    let marker_left = ((second[12] as usize) % k) as u8;
+    let marker_right = ((second[13] as usize) % k) as u8;
+
+    // Ellipse silhouette (discrete). pool_len mirrors interior/external corner
+    // enumeration without materializing the points.
+    let interior_count = (grid.cols.saturating_sub(1)) * (grid.rows.saturating_sub(1));
+    let pool_len = if interior_count >= 6 {
+        interior_count
+    } else {
+        2 * (grid.cols + grid.rows)
+    };
+    let ell_anchor = if pool_len == 0 {
+        0
+    } else {
+        ((primary[60] as usize) % pool_len) as u16
+    };
+
+    Channels {
+        bg,
+        bar_counts,
+        bar_order,
+        marker_left,
+        marker_right,
+        marker_k: k as u8,
+        ell_anchor,
+        ell_rx: primary[61] % 16,
+        ell_ry: primary[62] % 16,
+        ell_rot: primary[63] % 16,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -746,6 +880,28 @@ mod tests {
         assert!((e.rx - 37.335).abs() < 0.01, "rx={}", e.rx);
         assert!((e.ry - 57.7).abs() < 0.05, "ry={}", e.ry);
         assert!((e.rotation - 12.0).abs() < 1e-6, "rot={}", e.rotation);
+    }
+
+    #[test]
+    fn channels_agree_with_model() {
+        // The lean channels() gestalt must agree with the certified model on the
+        // fingerprint-driven channels it projects (hex-256, 3×4, blue bg).
+        let core = hex256_core();
+        let m = compute_render_model(&core, &HEX, 1.0, 12.0, false, 64).unwrap();
+        let ch = channels(&core, &core, &HEX, 1.0, 12.0, false);
+
+        assert_eq!(crate::POSSIBLE_EDGE_COLORS[ch.bg as usize], m.bg_color);
+        assert_eq!(ch.marker_left as usize, m.color_bar_markers.left);
+        assert_eq!(ch.marker_right as usize, m.color_bar_markers.right);
+        assert_eq!(ch.marker_k as usize, m.color_bar_markers.slots);
+        // Known golden values for hex-256.
+        assert_eq!(ch.bg, 3); // blue
+        assert_eq!((ch.marker_left, ch.marker_right, ch.marker_k), (2, 5, 15));
+        assert_eq!(ch.bar_order, [1, 3, 2, 0]); // gold, black, red, white (first-appearance)
+        // Ellipse rotation: step/15·180 must equal the model's 12°.
+        let e = m.ellipse.unwrap();
+        assert!((ch.ell_rot as f64 / 15.0 * 180.0 - e.rotation).abs() < 1e-9);
+        assert_eq!(ch.ell_rot, 1);
     }
 
     #[test]
