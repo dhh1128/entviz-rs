@@ -1,4 +1,4 @@
-//! Render-model computation (spec v9) — the abstract Tier-A structure an
+//! Render-model computation (spec v10) — the abstract Tier-A structure an
 //! implementation must compute prior to SVG serialization. This mirrors the
 //! Python reference's `model.json` (golden conformance corpus) field-for-field
 //! for **short inputs** (normalized core ≤ 64 bytes / ≤ 512 bits).
@@ -18,7 +18,7 @@ use crate::{
     quartile_tokens, select_visual_style, tokenize, tokenize_fingerprint, Alphabet, Grid, Token,
 };
 
-pub const SPEC_VERSION_V9: &str = "v9";
+pub const SPEC_VERSION_V10: &str = "v10";
 
 /// Domain tag for the second, domain-separated digest. The trailing NUL is
 /// included. `v6` is the *construction* version (fixed), not the spec version.
@@ -497,6 +497,19 @@ pub fn compute_render_model_fp(
 
     let edge_palette: Vec<&str> = style.edge_colors.iter().map(|s| s.as_str()).collect();
 
+    // v10 fingerprint-edge cells: the top-left cell (grid position 0, when used)
+    // and the cells of the 1st & 2nd quartile ftoks take their surround edge
+    // colour from the fingerprint (2 low-order ftok-quant bits → edge palette)
+    // instead of the nearest-palette nucleus echo, so the surround colour
+    // avalanches to a casual glance. See pipeline.py (v10 casual-avalanche).
+    let mut fp_edge_cells: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    if used_cells.contains(&0) {
+        fp_edge_cells.insert(0);
+    }
+    for qt in quartiles.iter().take(2).flatten() {
+        fp_edge_cells.insert(cell_of_token[qt.index]);
+    }
+
     let mut cells = Vec::with_capacity(cell_count);
     for ci in 0..cell_count {
         let col = ci % grid.cols;
@@ -507,15 +520,21 @@ pub fn compute_render_model_fp(
             // neutral entviz-bg nucleus (no entropy in the bg), gold/white frame,
             // 0.80× Crockford text — surround stays ftok-driven.
             let is_fp_middle = is_truncated && (8..=11).contains(&token.index);
-            let (bg, fg, edge, tsize) = if is_fp_middle {
+            let (bg, fg, tsize) = if is_fp_middle {
                 let bg = style.bg_color.clone();
-                let edge = closest_palette_color(&bg, &edge_palette).to_string();
                 let fg = fg_for_bg(&bg);
-                (bg, fg, edge, fp_middle_text_px)
+                (bg, fg, fp_middle_text_px)
             } else {
                 let (bg, fg) = nucleus_colors(token.quant);
-                let edge = closest_palette_color(&bg, &edge_palette).to_string();
-                (bg, fg, edge, text_size_px)
+                (bg, fg, text_size_px)
+            };
+            // v10: a fingerprint-edge cell overrides the nucleus echo with the
+            // ftok-driven palette colour; otherwise the edge is the nearest
+            // palette colour to the (possibly neutralized) nucleus bg.
+            let edge = if fp_edge_cells.contains(&ci) {
+                edge_palette[(used_ftoks[t_idx].quant & 0b11) as usize].to_string()
+            } else {
+                closest_palette_color(&bg, &edge_palette).to_string()
             };
             cells.push(CellModel {
                 index: ci,
@@ -635,7 +654,7 @@ pub fn compute_render_model_fp(
     let input_bytes = raw_bytes;
 
     Ok(RenderModel {
-        spec_version: SPEC_VERSION_V9.to_string(),
+        spec_version: SPEC_VERSION_V10.to_string(),
         cols: grid.cols,
         rows: grid.rows,
         bg_color: style.bg_color,
@@ -665,7 +684,7 @@ mod tests {
         assert_eq!(m.bg_color, "#2f3fbf"); // blue
         assert_eq!(m.input_bytes, 64);
         assert!(!m.truncated);
-        assert_eq!(m.spec_version, "v9");
+        assert_eq!(m.spec_version, "v10");
     }
 
     #[test]
@@ -675,13 +694,17 @@ mod tests {
         assert_eq!(c0.text.as_deref(), Some("012345"));
         assert_eq!(c0.nucleus_bg.as_deref(), Some("#452301"));
         assert_eq!(c0.fg.as_deref(), Some("#ffffff"));
-        assert_eq!(c0.edge_color.as_deref(), Some("#000000"));
+        // v10: cell 0 is the top-left fingerprint-edge cell, so its edge is the
+        // ftok-driven palette colour (#e7be00), not the v9 nucleus echo (#000000).
+        assert_eq!(c0.edge_color.as_deref(), Some("#e7be00"));
         assert_eq!(c0.surround_bits, Some(11348353));
         assert_eq!(c0.quartile, Some(2));
         assert_eq!(c0.text_size_px, Some(12.0));
 
         let c1 = &m.cells[1];
         assert_eq!(c1.nucleus_bg.as_deref(), Some("#ab8967"));
+        // cell 1 is the 1st-quartile fingerprint-edge cell (v10); its ftok-driven
+        // palette colour coincides with the v9 nucleus echo here.
         assert_eq!(c1.edge_color.as_deref(), Some("#ff3f2f"));
         assert_eq!(c1.quartile, Some(1));
     }
@@ -767,7 +790,8 @@ mod tests {
         let c0 = &m.cells[0];
         assert_eq!(c0.text.as_deref(), Some("aGVs"));
         assert_eq!(c0.nucleus_bg.as_deref(), Some("#6c6568"));
-        assert_eq!(c0.edge_color.as_deref(), Some("#ff3f2f"));
+        // v10: top-left fingerprint-edge cell → ftok-driven palette colour.
+        assert_eq!(c0.edge_color.as_deref(), Some("#000000"));
         assert_eq!(c0.surround_bits, Some(3731819));
         assert_eq!(c0.quartile, Some(3));
         assert_eq!(c0.text_size_px, Some(16.0)); // 4-char b64url → full size

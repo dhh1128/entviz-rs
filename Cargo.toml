@@ -2,7 +2,7 @@
 name = "entviz"
 version = "0.1.0"
 edition = "2021"
-description = "Visualize high-entropy values as comparable SVG diagrams (entviz, spec v6)."
+description = "Visualize high-entropy values as comparable SVG diagrams (entviz, spec v10)."
 license = "MIT"
 repository = "https://github.com/dhh1128/entviz-rs"
 keywords = ["entropy", "fingerprint", "svg", "visualization"]

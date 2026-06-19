@@ -1,4 +1,4 @@
-//! entviz — Rust reference port (spec v6).
+//! entviz — Rust reference port (spec v10).
 //!
 //! **STATUS: UNVERIFIED SCAFFOLD.** This crate ports the deterministic shared
 //! core of entviz (tokenization + quant extension, the SHA-512 fingerprint,
@@ -22,7 +22,7 @@ use base64::Engine;
 use sha2::{Digest, Sha512};
 use std::collections::BTreeMap;
 
-pub const SPEC_VERSION: &str = "v9";
+pub const SPEC_VERSION: &str = "v10";
 
 pub mod model;
 
