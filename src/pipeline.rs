@@ -6,7 +6,7 @@
 //! non-text pixels match the golden Tier-B raster.
 
 use crate::entropy::{self, tokenize_entropy, ParseError, BASE64URL};
-use crate::model::second_digest;
+use crate::second_digest;
 use crate::{
     choose_grid, closest_palette_color, compute_fingerprint, median_token, nucleus_colors,
     quartile_tokens, select_visual_style, tokenize_fingerprint, Grid, Token, VisualStyle,
