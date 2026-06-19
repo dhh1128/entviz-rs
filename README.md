@@ -45,4 +45,4 @@ Dependencies are intentionally minimal (`sha2`, `base64`, `hex`, `serde_json`).
 
 ## License
 
-MIT.
+[Apache License 2.0](LICENSE). See also [`NOTICE`](NOTICE).
