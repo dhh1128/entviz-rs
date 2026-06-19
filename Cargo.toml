@@ -1,6 +1,6 @@
 [package]
 name = "entviz"
-version = "0.10.0"
+version = "0.10.1"
 edition = "2021"
 description = "Visualize high-entropy values as comparable SVG diagrams (entviz, spec v10)."
 license = "Apache-2.0"
