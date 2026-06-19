@@ -27,6 +27,7 @@ pub const SPEC_VERSION: &str = "v10";
 pub mod entropy;
 pub mod keccak;
 pub mod model;
+pub mod pipeline;
 
 // --------------------------------------------------------------------------
 // Alphabets
