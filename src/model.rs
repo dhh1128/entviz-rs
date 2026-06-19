@@ -11,30 +11,13 @@
 //!
 //! Ground truth: `/home/daniel/code/entviz/compliance/corpus/<name>/model.json`.
 
-use sha2::{Digest, Sha512};
-
 use crate::{
     choose_grid, closest_palette_color, compute_fingerprint, median_token, nucleus_colors,
-    quartile_tokens, select_visual_style, tokenize, tokenize_fingerprint, Alphabet, Grid, Token,
+    quartile_tokens, second_digest, select_visual_style, tokenize, tokenize_fingerprint, Alphabet,
+    Grid, Token,
 };
 
 pub const SPEC_VERSION_V10: &str = "v10";
-
-/// Domain tag for the second, domain-separated digest. The trailing NUL is
-/// included. `v6` is the *construction* version (fixed), not the spec version.
-pub const MIDDLE_DOMAIN_TAG: &[u8] = b"entviz/fingerprint-middle/v6\x00";
-
-/// `second = SHA-512(DOMAIN_TAG ‖ core)`. Computed for every input (v9): drives
-/// the two color-bar markers on all inputs (and the middle cells on large ones).
-pub fn second_digest(core: &str) -> [u8; 64] {
-    let mut h = Sha512::new();
-    h.update(MIDDLE_DOMAIN_TAG);
-    h.update(core.as_bytes());
-    let out = h.finalize();
-    let mut d = [0u8; 64];
-    d.copy_from_slice(&out);
-    d
-}
 
 /// Encode a 24-bit value as 5 lowercase Crockford base32 chars (v9 middle-cell
 /// readout). Mirrors `entropy._crockford5`: high-order first, single-case,

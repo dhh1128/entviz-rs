@@ -27,8 +27,15 @@ pub const SPEC_VERSION: &str = "v10";
 
 pub mod entropy;
 pub mod keccak;
-pub mod model;
 pub mod pipeline;
+
+// The render-model / feature-vector layer exists only to serve the private
+// adversarial grinder (entviz-adversarial), which path-depends on this crate.
+// It is NOT part of the public reference implementation: gated behind the
+// off-by-default `adversarial` feature and excluded from the published crate
+// (see Cargo.toml). Building the grinder enables `--features adversarial`.
+#[cfg(feature = "adversarial")]
+pub mod model;
 
 // --------------------------------------------------------------------------
 // Alphabets
@@ -141,6 +148,23 @@ pub fn tokenize_fingerprint(digest: &[u8; 64]) -> Vec<Token> {
     let toks = tokenize(&b64, &BASE64URL);
     assert_eq!(toks.len(), 22, "expected 22 ftoks");
     toks
+}
+
+/// Domain tag for the second, domain-separated digest. The trailing NUL is
+/// included. `v6` is the *construction* version (fixed), not the spec version.
+pub const MIDDLE_DOMAIN_TAG: &[u8] = b"entviz/fingerprint-middle/v6\x00";
+
+/// `second = SHA-512(DOMAIN_TAG ‖ core)`. Computed for every input (v9): drives
+/// the two color-bar markers on all inputs (and the middle cells on large ones).
+/// A legitimate part of the renderer — not adversarial tooling.
+pub fn second_digest(core: &str) -> [u8; 64] {
+    let mut h = Sha512::new();
+    h.update(MIDDLE_DOMAIN_TAG);
+    h.update(core.as_bytes());
+    let out = h.finalize();
+    let mut d = [0u8; 64];
+    d.copy_from_slice(&out);
+    d
 }
 
 // --------------------------------------------------------------------------

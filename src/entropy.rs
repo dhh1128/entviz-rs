@@ -1118,8 +1118,7 @@ fn detect_alphabet_by_disproof(text: &str) -> Option<Alphabet> {
 // --------------------------------------------------------------------------
 // Large-input tokenization (head + fingerprint-middle + tail)
 // --------------------------------------------------------------------------
-use crate::model::second_digest;
-use crate::{tokenize, Token};
+use crate::{second_digest, tokenize, Token};
 
 const HEAD_TOKENS: usize = 8;
 const TAIL_TOKENS: usize = 8;

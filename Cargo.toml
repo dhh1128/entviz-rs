@@ -7,9 +7,11 @@ license = "Apache-2.0"
 repository = "https://github.com/dhh1128/entviz-rs"
 keywords = ["entropy", "fingerprint", "svg", "visualization"]
 categories = ["visualization", "cryptography"]
-# Keep the published crate to code + license + readme; drop dev/agent tooling
-# (CI, release/admin scripts, and AI-assistant instruction files) that
-# downstream users don't need.
+# Keep the published crate to code + license + readme. Drop dev/agent tooling
+# (CI, release/admin scripts, AI-assistant instruction files) AND the adversarial
+# render-model / feature-vector layer (model.rs + the render-model oracle bin),
+# which exists only to serve the private grinder and is never built by default
+# (see the `adversarial` feature below).
 exclude = [
     ".github",
     "scripts",
@@ -17,24 +19,35 @@ exclude = [
     "AGENTS.md",
     "CLAUDE.md",
     "GEMINI.md",
+    "src/model.rs",
+    "src/bin/render_model.rs",
 ]
+
+[features]
+# Off by default. Compiles the render-model / feature-vector oracle (model.rs +
+# the entviz-render-model bin) that the private adversarial grinder path-depends
+# on. NOT part of the public reference implementation; the files it needs are
+# excluded from the published crate, so this is only buildable from a source
+# checkout of the repo, never from crates.io.
+adversarial = []
 
 [dependencies]
 sha2 = "0.10"        # SHA-512 fingerprint
 base64 = "0.22"      # base64url (no pad) for ftok tokenization
 hex = "0.4"          # digest hex for the clip-path salt + middle cells
-serde_json = "1"     # render-model bin: emit the golden model.json schema
+serde_json = "1"     # conformance CLI stdin parsing (+ the render-model oracle)
 
 [[bin]]
 name = "entviz-conformance"
 path = "src/main.rs"
 
-# Differential oracle for the adversarial grinder: read a parse-extracted
-# request (core, fingerprint_core, alphabet, geometry) as JSON on stdin, print
-# the render model as JSON matching the Python golden model.json schema.
+# Differential oracle for the private adversarial grinder: read a parse-extracted
+# request as JSON on stdin, print the render model as JSON. Gated behind the
+# `adversarial` feature and excluded from the published crate.
 [[bin]]
 name = "entviz-render-model"
 path = "src/bin/render_model.rs"
+required-features = ["adversarial"]
 
 [lib]
 name = "entviz"
