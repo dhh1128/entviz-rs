@@ -41,11 +41,20 @@ This repository has an established test suite. Follow strict TDD:
 
 ## CI and Documentation
 
-This repo has no CI workflows. Until it does, any time you make code
-changes to the user, propose an appropriate set of GitHub actions (e.g.,
-`.github/workflows/ci.yml`) that builds and runs tests on every push and
-pull request. Propose to remove this instruction from AGENTS.md on the
-same commit.
+This repo has CI under `.github/workflows/` (`ci.yml` runs fmt + clippy
+`-D warnings` + `cargo test`, plus a Tier-A conformance job against the
+reference corpus; `release.yml` is the `cargo publish` pipeline). Treat CI
+as part of the code you maintain, not an afterthought:
+- Before you consider a change done, run the same gates CI runs locally —
+  `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features
+  --locked -- -D warnings`, and `cargo test --locked` — so you never push
+  work that red-lights the pipeline.
+- When you add or change behavior, keep the workflows in sync: extend the
+  test/conformance steps when new surfaces need guarding, and update the
+  spec-version sync logic when `SPEC_VERSION` moves.
+- If you touch a workflow file, keep every third-party action SHA-pinned to
+  a node24-runtime (or composite/docker) release, matching the existing
+  pinning convention, and let Dependabot bump the SHAs.
 
 When writing or modifying GitHub Actions workflows, always use the latest
 stable release of each action. Avoid versions pinned to Node.js 16 or
