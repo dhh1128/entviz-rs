@@ -1,5 +1,10 @@
 # entviz-rs
 
+[![CI](https://github.com/dhh1128/entviz-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/dhh1128/entviz-rs/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/entviz.svg)](https://crates.io/crates/entviz)
+[![docs.rs](https://docs.rs/entviz/badge.svg)](https://docs.rs/entviz)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 Rust implementation of [entviz](https://github.com/dhh1128/entviz) (spec **v10**)
 — visualize high-entropy values as comparable SVG diagrams.
 

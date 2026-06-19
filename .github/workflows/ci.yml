@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# Third-party actions are pinned by full commit SHA (node24-runtime / composite
+# versions, resolved 2026-06-19). A mutable tag like @v6 can be silently
+# retargeted; Dependabot bumps the SHAs (with the `# vN` comment) weekly.
+jobs:
+  test:
+    name: fmt + clippy + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc  # v2.9.1
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (deny warnings)
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+
+      - name: Test
+        run: cargo test --locked
+
+  conformance:
+    name: spec-sync + Tier-A conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
+        with:
+          persist-credentials: false
+
+      # The entviz reference repo carries the algorithm spec, SPEC_VERSION, and
+      # the golden conformance corpus this crate is certified against.
+      - name: Check out the entviz reference (spec + corpus)
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
+        with:
+          repository: dhh1128/entviz
+          path: entviz-ref
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc  # v2.9.1
+
+      - name: Build the conformance binary
+        run: cargo build --release --bin entviz-conformance --locked
+
+      - name: Install the Tier-A harness (lxml only; no rasterizer needed)
+        run: |
+          set -euo pipefail
+          python3 -m venv /tmp/harness
+          /tmp/harness/bin/pip install --quiet --upgrade pip
+          /tmp/harness/bin/pip install --quiet lxml
+
+      # Tier A (render model) + error-rejection vectors. This both PROVES
+      # conformance and SURFACES spec drift: when the reference spec is ahead of
+      # this crate we warn loudly but do not block unrelated PRs; when versions
+      # match (or this crate is ahead) it is a hard gate. No untrusted GitHub
+      # event data is interpolated here (only trusted workspace paths).
+      - name: Spec-version sync check + Tier-A conformance
+        run: |
+          set -euo pipefail
+          ours=$(grep -oP 'SPEC_VERSION: &str = "\Kv[0-9]+' src/lib.rs)
+          ref=$(grep -oP 'SPEC_VERSION = "\Kv[0-9]+' entviz-ref/src/entviz/__init__.py)
+          echo "entviz-rs targets spec ${ours}; reference impl/spec is ${ref}"
+          bin="${GITHUB_WORKSPACE}/target/release/entviz-conformance"
+          run_conformance() {
+            ( cd entviz-ref \
+              && PYTHONPATH=src:. /tmp/harness/bin/python -m compliance.runner \
+                   --impl-cmd "${bin}" --tiers A )
+          }
+          if [ "${ours}" = "${ref}" ]; then
+            echo "Spec versions match — conformance is a hard gate."
+            run_conformance
+          else
+            echo "::warning title=Spec drift::reference impl/spec is ${ref} but entviz-rs targets ${ours} — an upgrade is needed"
+            if [ "${ref#v}" -gt "${ours#v}" ]; then
+              echo "Reference is AHEAD; the corpus run is informational while this crate catches up."
+              run_conformance || echo "::warning title=Conformance::failed against the newer reference corpus (expected while behind)"
+            else
+              echo "This crate is ahead of the reference — hard gate."
+              run_conformance
+            fi
+          fi
