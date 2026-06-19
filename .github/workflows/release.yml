@@ -1,0 +1,58 @@
+name: Release
+
+# Tag-triggered publish. scripts/release.py (human-run) bumps + tags; this
+# workflow re-runs the gate, verifies the tag matches Cargo.toml, publishes to
+# crates.io, and creates the GitHub release. Requires the CARGO_REGISTRY_TOKEN
+# repo secret. Actions are pinned by node24/composite commit SHA, matching
+# ci.yml. No untrusted github.event.* data is interpolated (only the trusted
+# tag ref GITHUB_REF_NAME, which only a maintainer who can push tags controls).
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc  # v2.9.1
+
+      - name: Gate (fmt + clippy + test)
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check
+          cargo clippy --all-targets --all-features --locked -- -D warnings
+          cargo test --locked
+
+      - name: Verify the tag matches Cargo.toml
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          pkg=$(grep -oP '^version = "\K[^"]+' Cargo.toml)
+          echo "tag=${tag} Cargo.toml=${pkg}"
+          if [ "${tag}" != "${pkg}" ]; then
+            echo "::error::tag ${tag} does not match Cargo.toml version ${pkg}"
+            exit 1
+          fi
+
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish --locked
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF_NAME}" --generate-notes

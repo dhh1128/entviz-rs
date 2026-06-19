@@ -48,6 +48,44 @@ full Tier-A/Tier-B golden comparison is the Python runner above.
 
 Dependencies are intentionally minimal (`sha2`, `base64`, `hex`, `serde_json`).
 
+## Spec compliance & versioning
+
+The crate version encodes the entviz **spec** level it is compliant with:
+
+> **`0.<spec-major>.x`** — e.g. `0.10.x` ⇒ compliant with entviz spec **v10**
+> (the same convention the Python reference uses, where spec v10 ↔ `0.10.0`).
+
+A spec bump (v10 → v11) is a **minor** release here (`0.10.x` → `0.11.0`); a
+**patch** is a crate-only change within a spec version. The canonical spec
+level is the `SPEC_VERSION` constant in `src/lib.rs`.
+
+CI **surfaces spec drift**: the `conformance` job checks out the public
+[entviz reference](https://github.com/dhh1128/entviz), compares its
+`SPEC_VERSION` to this crate's, and runs the Tier-A conformance suite. When the
+reference spec is *ahead* of this crate it warns loudly (without blocking
+unrelated PRs); when the versions match (or this crate is ahead) conformance is
+a hard gate. `scripts/release.py` performs the same drift check before tagging.
+
+## Releasing
+
+Releases are **human-run** (agents must not push tags). From a clean, in-sync
+`main`:
+
+```sh
+python scripts/release.py                  # patch bump
+python scripts/release.py --minor -m "..." # minor bump (e.g. a spec bump)
+```
+
+It runs the gate (fmt + clippy + test), bumps `Cargo.toml` + `Cargo.lock`,
+commits, pushes, and tags `vX.Y.Z`. The tag triggers
+[`.github/workflows/release.yml`](.github/workflows/release.yml), which re-runs
+the gate, verifies the tag matches `Cargo.toml`, and `cargo publish`es to
+crates.io (needs the `CARGO_REGISTRY_TOKEN` repo secret).
+
+Branch protection (require PR + CI + 1 review for contributors; maintainers
+bypass via direct push) is configured by
+[`scripts/setup-branch-protection.sh`](scripts/setup-branch-protection.sh).
+
 ## License
 
 [Apache License 2.0](LICENSE). See also [`NOTICE`](NOTICE).
