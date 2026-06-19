@@ -24,6 +24,7 @@ use std::collections::BTreeMap;
 
 pub const SPEC_VERSION: &str = "v10";
 
+pub mod keccak;
 pub mod model;
 
 // --------------------------------------------------------------------------
