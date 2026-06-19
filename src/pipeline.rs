@@ -1040,4 +1040,299 @@ mod tests {
         assert!(render("a1b2c3d4e5f6a7b8", 1.0, 4.0, None).is_err());
         assert!(render("a1b2c3d4e5f6a7b8", 1.0, 40.0, None).is_err());
     }
+
+    // ===================================================================
+    // sanitize_note
+    // ===================================================================
+    #[test]
+    fn sanitize_note_cases() {
+        assert!(sanitize_note(None).unwrap().is_none());
+        assert!(sanitize_note(Some("")).unwrap().is_none()); // empty -> None
+        assert_eq!(
+            sanitize_note(Some("abc123")).unwrap().as_deref(),
+            Some("abc123")
+        );
+        // too long (> 8 chars)
+        assert!(matches!(
+            sanitize_note(Some("ninechars")),
+            Err(RenderError::Note(_))
+        ));
+        // non-alphanumeric
+        assert!(matches!(
+            sanitize_note(Some("a b")),
+            Err(RenderError::Note(_))
+        ));
+    }
+
+    // ===================================================================
+    // XML escaping + number formatting
+    // ===================================================================
+    #[test]
+    fn escaping_and_number_formatting() {
+        assert_eq!(esc_attr("a&b<c>d\"e"), "a&amp;b&lt;c&gt;d&quot;e");
+        assert_eq!(esc_text("a&b<c>d\"e"), "a&amp;b&lt;c&gt;d\"e"); // quotes left as-is
+        assert_eq!(n(3.0), "3");
+        assert_eq!(n(3.5), "3.5");
+    }
+
+    #[test]
+    fn b64url_encode_no_padding() {
+        assert_eq!(b64url_encode(b"foobar"), "Zm9vYmFy");
+        // bytes that would normally pad: no '=' present
+        assert!(!b64url_encode(b"foo").contains('='));
+    }
+
+    // ===================================================================
+    // Geometry helpers
+    // ===================================================================
+    #[test]
+    fn box_origin_all_four_ranges() {
+        // top row (i<10): moves right along x
+        let (x, y) = box_origin(3, 100.0, 200.0, 10.0, 5.0);
+        assert_eq!((x, y), (130.0, 200.0));
+        // right column (10..12): fixed x, moves down
+        let (x, y) = box_origin(10, 100.0, 200.0, 10.0, 5.0);
+        assert_eq!((x, y), (190.0, 205.0));
+        // bottom row (12..22): moves left along x at bottom
+        let (x, y) = box_origin(12, 100.0, 200.0, 10.0, 5.0);
+        assert_eq!((x, y), (100.0 + 9.0 * 10.0, 200.0 + 15.0));
+        // left column (22..24): the else branch
+        let (x, y) = box_origin(22, 100.0, 200.0, 10.0, 5.0);
+        assert_eq!(x, 100.0);
+        assert!(y > 200.0);
+    }
+
+    #[test]
+    fn sub_center_positions() {
+        let grid = Grid {
+            cols: 2,
+            rows: 2,
+            token_count: 4,
+        };
+        // cell 0 -> top-left sub-cell center
+        let (cx, cy) = sub_center(0, 0.0, 0.0, &grid, 10.0, 10.0);
+        assert_eq!((cx, cy), (5.0, 5.0));
+        // cell 3 -> bottom-right sub-cell center
+        let (cx, cy) = sub_center(3, 0.0, 0.0, &grid, 10.0, 10.0);
+        assert_eq!((cx, cy), (15.0, 15.0));
+    }
+
+    #[test]
+    fn quartile_polygon_all_corners() {
+        for q in 0..4 {
+            let p = quartile_polygon(q, 0.0, 0.0, 8.0, 4.0);
+            // three "x,y" points
+            assert_eq!(p.split(' ').count(), 3);
+        }
+        // q0 anchors at the top-left corner
+        assert!(quartile_polygon(0, 0.0, 0.0, 8.0, 4.0).starts_with("0,0"));
+    }
+
+    // ===================================================================
+    // Color helpers
+    // ===================================================================
+    #[test]
+    fn overlay_for_bg_all_backgrounds() {
+        assert_eq!(overlay_for_bg("#ffffff"), ("#000000", 0.20, 0.30));
+        assert_eq!(overlay_for_bg("#e7be00"), ("#000000", 0.20, 0.30));
+        assert_eq!(overlay_for_bg("#ff3f2f"), ("#000000", 0.25, 0.35));
+        assert_eq!(overlay_for_bg("#2f3fbf"), ("#ffffff", 0.35, 0.45));
+        // default arm (e.g. black)
+        assert_eq!(overlay_for_bg("#000000"), ("#000000", 0.20, 0.30));
+    }
+
+    #[test]
+    fn band_letter_mapping() {
+        assert_eq!(band_letter("#ffffff"), Some("W"));
+        assert_eq!(band_letter("#e7be00"), Some("G"));
+        assert_eq!(band_letter("#ff3f2f"), Some("R"));
+        assert_eq!(band_letter("#2f3fbf"), Some("B"));
+        assert_eq!(band_letter("#000000"), Some("K"));
+        assert_eq!(band_letter("#123456"), None);
+    }
+
+    #[test]
+    fn two_bit_counts_and_first_appearance() {
+        let mut d = [0u8; 64];
+        d[0] = 0b00_01_10_11; // one of each 2-bit pattern in byte 0
+        let counts = two_bit_counts(&d);
+        // remaining 63 bytes are zero -> pattern 0 dominates
+        assert_eq!(counts[1], 1);
+        assert_eq!(counts[2], 1);
+        assert_eq!(counts[3], 1);
+        assert!(counts[0] > 100);
+        let order = first_appearance(&d);
+        // byte 0 low-to-high: shift 0 -> pattern 11(=3), shift2 -> 10(=2),
+        // shift4 -> 01(=1), shift6 -> 00(=0). So 3 appears first.
+        assert_eq!(order[0], 3);
+        // all four patterns present exactly once in the ordering
+        let mut sorted = order;
+        sorted.sort();
+        assert_eq!(sorted, [0, 1, 2, 3]);
+    }
+
+    // ===================================================================
+    // assign_cell_indices
+    // ===================================================================
+    fn tok(index: usize, text: &str, quant: u32) -> Token {
+        Token {
+            text: text.into(),
+            index,
+            quant,
+        }
+    }
+
+    #[test]
+    fn assign_cell_indices_identity_when_full() {
+        let grid = Grid {
+            cols: 2,
+            rows: 2,
+            token_count: 4,
+        };
+        let tokens = vec![
+            tok(0, "a", 0),
+            tok(1, "b", 0),
+            tok(2, "c", 0),
+            tok(3, "d", 0),
+        ];
+        let ci = assign_cell_indices(&tokens, &grid, &Some(tokens[0].clone()), &tokens);
+        assert_eq!(ci, vec![0, 1, 2, 3]); // token_count >= cell_count
+    }
+
+    #[test]
+    fn assign_cell_indices_shifts_for_sparse_grid() {
+        let grid = Grid {
+            cols: 3,
+            rows: 2,
+            token_count: 3,
+        }; // 6 cells, 3 tokens -> all three shifts apply
+        let tokens = vec![tok(0, "m", 0), tok(1, "a", 0), tok(2, "z", 0)];
+        let median = median_token(&tokens);
+        let ci = assign_cell_indices(&tokens, &grid, &median, &tokens);
+        assert_eq!(ci.len(), 3);
+        // every assigned cell index is in range and distinct
+        assert!(ci.iter().all(|&c| c < 6));
+        let set: std::collections::HashSet<_> = ci.iter().collect();
+        assert_eq!(set.len(), 3);
+    }
+
+    // ===================================================================
+    // render: error paths + label variants + truncation
+    // ===================================================================
+    #[test]
+    fn render_rejects_input_too_long() {
+        let huge = "a".repeat(70_000);
+        assert!(matches!(
+            render(&huge, 1.0, 12.0, None),
+            Err(RenderError::InputTooLong)
+        ));
+    }
+
+    #[test]
+    fn render_rejects_aspect_ratio_out_of_range() {
+        assert!(matches!(
+            render("a1b2c3d4e5f6a7b8", 200.0, 12.0, None),
+            Err(RenderError::AspectRatioRange)
+        ));
+        assert!(matches!(
+            render("a1b2c3d4e5f6a7b8", 0.001, 12.0, None),
+            Err(RenderError::AspectRatioRange)
+        ));
+    }
+
+    #[test]
+    fn render_empty_input_has_no_tokens() {
+        assert!(matches!(
+            render("", 1.0, 12.0, None),
+            Err(RenderError::NoTokens)
+        ));
+    }
+
+    #[test]
+    fn render_b64url_detected_label() {
+        // '-' and '_' force base64url detection -> "b64url(N)" type label.
+        let svg = render("ABC-_DEF", 1.0, 12.0, None).unwrap();
+        assert!(svg.contains("b64url("));
+    }
+
+    #[test]
+    fn render_b64_detected_label() {
+        // '+' / '/' force plain base64 detection -> "b64(N)" type label.
+        let svg = render("ABC+/DEF", 1.0, 12.0, None).unwrap();
+        assert!(svg.contains("b64("));
+    }
+
+    #[test]
+    fn render_type_with_prefix_label() {
+        // 0x-prefixed hex carries BOTH a type name and a prefix -> the
+        // "type: prefix..." top-label branch.
+        let svg = render("0xabcdef12", 1.0, 12.0, None).unwrap();
+        assert!(svg.contains("hex("));
+        assert!(svg.contains("0x..."));
+    }
+
+    #[test]
+    fn render_suffix_only_bottom_label() {
+        // LEI has a suffix but no note -> the (suffix, None) bottom branch.
+        let svg = render("5493001KJTIIGC8Y1R12", 1.0, 12.0, None).unwrap();
+        assert!(svg.contains("...12"));
+        assert!(!svg.contains("data-user-note"));
+    }
+
+    #[test]
+    fn render_text_fallback_label() {
+        // plain text -> txt(N)->b64url label.
+        let svg = render("hello world", 1.0, 12.0, None).unwrap();
+        assert!(svg.contains("txt(") && svg.contains("b64url"));
+    }
+
+    #[test]
+    fn render_swhid_semantic_prefix_label() {
+        // type_name is empty for swhid; the label is just the prefix + "...".
+        let svg = render(
+            "swh:1:rev:309cf2674ee7a0749978cf8265ab91a60aea0f7d",
+            1.0,
+            12.0,
+            None,
+        )
+        .unwrap();
+        assert!(svg.contains("swh:1:rev:..."));
+    }
+
+    #[test]
+    fn render_suffix_with_note_bottom_label() {
+        // LEI carries a suffix; add a note -> the (suffix, note) bottom branch.
+        let svg = render("5493001KJTIIGC8Y1R12", 1.0, 12.0, Some("hi")).unwrap();
+        assert!(svg.contains("data-user-note=\"hi\""));
+        assert!(svg.contains("...12"));
+    }
+
+    #[test]
+    fn render_note_only_bottom_label() {
+        let svg = render("a1b2c3d4e5f6a7b8", 1.0, 12.0, Some("note1")).unwrap();
+        assert!(svg.contains("data-user-note=\"note1\""));
+    }
+
+    #[test]
+    fn render_large_input_is_truncated() {
+        let core = "a".repeat(400);
+        let svg = render(&core, 1.0, 12.0, None).unwrap();
+        assert!(svg.contains("data-truncated=\"true\""));
+        assert!(svg.contains("data-cell-fingerprint=\"true\""));
+        assert!(svg.contains("fingerprint of "));
+    }
+
+    #[test]
+    fn render_is_deterministic() {
+        let a = render("0123456789abcdef0123456789abcdef", 1.0, 12.0, None).unwrap();
+        let b = render("0123456789abcdef0123456789abcdef", 1.0, 12.0, None).unwrap();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn render_hex_uses_smaller_cell_text() {
+        // hex (4 bits/char) scales cell text to 0.75; just assert it renders text.
+        let svg = render("0123456789abcdef0123456789abcdef", 1.0, 12.0, None).unwrap();
+        assert!(svg.contains("<text"));
+    }
 }

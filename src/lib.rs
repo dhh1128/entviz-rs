@@ -384,4 +384,203 @@ mod tests {
         assert_eq!(g.cols, 3);
         assert_eq!(g.rows, 4);
     }
+
+    // ---- char_value ----
+    #[test]
+    fn char_value_direct_and_case_fold() {
+        // direct hit
+        assert_eq!(char_value(HEX.chars, 'A', 4), 10);
+        // lowercase folds to uppercase alphabet position
+        assert_eq!(char_value(HEX.chars, 'a', 4), 10);
+        // base64 special-char aliases (the `-`/`+` -> 62, `_`/`/` -> 63 branch)
+        assert_eq!(char_value(BASE64URL.chars, '-', 6), 62);
+        assert_eq!(char_value(BASE64URL.chars, '_', 6), 63);
+        assert_eq!(char_value(BASE64URL.chars, '+', 6), 62);
+        assert_eq!(char_value(BASE64URL.chars, '/', 6), 63);
+        // unknown char in a 6-bit alphabet -> -1 (falls through the alias block)
+        assert_eq!(char_value(BASE64URL.chars, '!', 6), -1);
+        // unknown char in a 4-bit alphabet -> -1
+        assert_eq!(char_value(HEX.chars, 'z', 4), -1);
+    }
+
+    // ---- tokenize ----
+    #[test]
+    fn tokenize_empty_is_empty() {
+        assert!(tokenize("", &HEX).is_empty());
+    }
+
+    #[test]
+    fn tokenize_indices_are_sequential() {
+        let t = tokenize("0123456789abcdef", &HEX);
+        for (i, tok) in t.iter().enumerate() {
+            assert_eq!(tok.index, i);
+        }
+    }
+
+    #[test]
+    fn tokenize_unknown_char_treated_as_zero() {
+        // '!' is not in HEX; char_value -> -1 -> coerced to 0. The token still
+        // forms; the unknown nibble contributes 0.
+        let t = tokenize("!!!!!!", &HEX);
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].quant, 0);
+    }
+
+    #[test]
+    fn tokenize_short_chunk_quant_extends_to_24_bits() {
+        // single hex char 'f' (4 bits) extends to fill 24 bits.
+        let t = tokenize("f", &HEX);
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].quant & 0xFFFFFF, t[0].quant); // within 24 bits
+        assert_ne!(t[0].quant, 0);
+    }
+
+    #[test]
+    fn tokenize_base64url_special_chars() {
+        let t = tokenize("ab-_", &BASE64URL);
+        assert_eq!(t.len(), 1);
+        // a=26? no: BASE64URL 'a' is at index 26, 'b' 27, '-' 62, '_' 63.
+        let expected = (26u32 << 18) | (27u32 << 12) | (62u32 << 6) | 63u32;
+        assert_eq!(t[0].quant, expected & 0xFFFFFF);
+    }
+
+    // ---- fingerprint ----
+    #[test]
+    fn fingerprint_is_deterministic_and_distinct() {
+        assert_eq!(compute_fingerprint("hello"), compute_fingerprint("hello"));
+        assert_ne!(compute_fingerprint("hello"), compute_fingerprint("hellp"));
+        assert_eq!(compute_fingerprint("hello").len(), 64);
+    }
+
+    #[test]
+    fn second_digest_is_domain_separated() {
+        // The middle digest must differ from the primary fingerprint for the
+        // same input (domain tag prepended).
+        assert_ne!(
+            second_digest("hello").to_vec(),
+            compute_fingerprint("hello").to_vec()
+        );
+        assert_eq!(second_digest("x"), second_digest("x"));
+    }
+
+    #[test]
+    fn tokenize_fingerprint_count() {
+        let d = compute_fingerprint("anything");
+        let toks = tokenize_fingerprint(&d);
+        assert_eq!(toks.len(), 22);
+    }
+
+    // ---- median / quartile ----
+    #[test]
+    fn median_empty_is_none() {
+        assert!(median_token(&[]).is_none());
+    }
+
+    #[test]
+    fn median_picks_lower_middle_by_text() {
+        let toks = tokenize("0123456789abcdef0123", &HEX); // 4 tokens? 20/6 ceil
+        let m = median_token(&toks).unwrap();
+        // median index is (len-1)/2 of the text-sorted list.
+        let mut sorted: Vec<&Token> = toks.iter().collect();
+        sorted.sort_by(|a, b| a.text.cmp(&b.text).then(a.index.cmp(&b.index)));
+        assert_eq!(m.text, sorted[(sorted.len() - 1) / 2].text);
+    }
+
+    #[test]
+    fn quartile_empty_is_four_nones() {
+        let q = quartile_tokens(&[]);
+        assert_eq!(q.len(), 4);
+        assert!(q.iter().all(|x| x.is_none()));
+    }
+
+    #[test]
+    fn quartile_returns_four_slots() {
+        let toks = tokenize("0123456789abcdef0123456789abcdef", &HEX);
+        let q = quartile_tokens(&toks);
+        assert_eq!(q.len(), 4);
+        // first quartile is index 0 of the reversed-text sort
+        assert!(q[0].is_some());
+    }
+
+    // ---- colors ----
+    #[test]
+    fn srgb_to_linear_and_oklab_extremes() {
+        assert!(oklab_lightness(255, 255, 255) > 0.99);
+        assert!(oklab_lightness(0, 0, 0) < 0.01);
+        // mid grey lands between
+        let mid = oklab_lightness(128, 128, 128);
+        assert!(mid > 0.3 && mid < 0.8);
+    }
+
+    #[test]
+    fn nucleus_colors_byte_order_and_threshold() {
+        // red is the low byte, blue the high byte (CSS #RRGGBB order).
+        let (bg, fg) = nucleus_colors(0x452301);
+        assert_eq!(bg, "#012345");
+        assert_eq!(fg, "#ffffff"); // dark bg -> white fg
+                                   // bright yellow -> black fg
+        let (bg2, fg2) = nucleus_colors(0x00ffff); // r=0xff g=0xff b=0x00 -> #ffff00
+        assert_eq!(bg2, "#ffff00");
+        assert_eq!(fg2, "#000000");
+    }
+
+    #[test]
+    fn weighted_rgb_distance_zero_for_equal() {
+        assert_eq!(weighted_rgb_distance("#123456", "#123456"), 0.0);
+        assert!(weighted_rgb_distance("#000000", "#ffffff") > 0.0);
+    }
+
+    #[test]
+    fn closest_palette_color_picks_nearest() {
+        let palette = ["#ffffff", "#000000", "#ff0000"];
+        assert_eq!(closest_palette_color("#fefefe", &palette), "#ffffff");
+        assert_eq!(closest_palette_color("#010101", &palette), "#000000");
+        assert_eq!(closest_palette_color("#fe0000", &palette), "#ff0000");
+    }
+
+    // ---- visual style ----
+    #[test]
+    fn select_visual_style_all_four_bg_indices() {
+        for idx in 0u32..4 {
+            // craft an ftok whose low two quant bits == idx
+            let ftok = Token {
+                text: "x".into(),
+                index: 0,
+                quant: idx,
+            };
+            let style = select_visual_style(&ftok);
+            assert_eq!(style.bg_color, POSSIBLE_EDGE_COLORS[idx as usize]);
+            // edge colors are the other four, in order, excluding bg
+            assert_eq!(style.edge_colors.len(), 4);
+            assert!(!style.edge_colors.contains(&style.bg_color));
+        }
+    }
+
+    // ---- grid ----
+    #[test]
+    fn choose_grid_degenerate_token_counts_fall_back_to_2x2() {
+        // token_count < 2 -> no candidates -> default 2x2.
+        for tc in [0usize, 1] {
+            let g = choose_grid(tc, 1.0);
+            assert_eq!((g.cols, g.rows), (2, 2));
+            assert_eq!(g.token_count, tc);
+        }
+    }
+
+    #[test]
+    fn choose_grid_no_candidate_above_target_picks_widest() {
+        // A target aspect ratio nothing can reach forces the
+        // "max by aspect" fallback branch.
+        let g = choose_grid(11, 100.0);
+        // widest layout maximizes cols*3 / rows*2.
+        assert!(g.cols as f64 / g.rows as f64 >= 1.0);
+        assert_eq!(g.token_count, 11);
+    }
+
+    #[test]
+    fn choose_grid_tall_target_prefers_tall() {
+        let wide = choose_grid(12, 5.0);
+        let tall = choose_grid(12, 0.2);
+        assert!(wide.cols >= tall.cols);
+    }
 }

@@ -160,4 +160,49 @@ mod tests {
             "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
         );
     }
+
+    #[test]
+    fn abc_vector() {
+        // Cross-checked against the Python reference keccak256.
+        assert_eq!(
+            keccak256_hex(b"abc"),
+            "4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45"
+        );
+    }
+
+    #[test]
+    fn multiblock_absorb() {
+        // 200 bytes > one 136-byte rate block, so this exercises the
+        // multi-block absorb loop (keccak256 lines around the `while` head).
+        // Value cross-checked against the Python reference.
+        assert_eq!(
+            keccak256_hex(&[b'a'; 200]),
+            "96ea54061def936c4be90b518992fdc6f12f535068a256229aca54267b4d084d"
+        );
+    }
+
+    #[test]
+    fn multiblock_non_multiple_of_rate() {
+        // 215 bytes: > one block, final partial block padded. Cross-checked
+        // against the Python reference.
+        let data: Vec<u8> = b"The quick brown fox jumps over the lazy dog"
+            .iter()
+            .cycle()
+            .take(215)
+            .copied()
+            .collect();
+        assert_eq!(
+            keccak256_hex(&data),
+            "2bca465790fbe952f1e3768e10357fe439df1a1253d3dbfaf2a2a583911c68d8"
+        );
+    }
+
+    #[test]
+    fn digest_and_hex_agree() {
+        let d = keccak256(b"entviz");
+        let h = keccak256_hex(b"entviz");
+        let manual: String = d.iter().map(|b| format!("{:02x}", b)).collect();
+        assert_eq!(h, manual);
+        assert_eq!(d.len(), 32);
+    }
 }

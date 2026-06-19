@@ -1321,4 +1321,589 @@ mod tests {
     fn text_fallback_is_none() {
         assert!(parse("hello world").unwrap().is_none());
     }
+
+    // ===================================================================
+    // Char-class helpers
+    // ===================================================================
+    #[test]
+    fn char_class_helpers() {
+        assert!(is_hex("0aF9"));
+        assert!(!is_hex(""));
+        assert!(!is_hex("0g"));
+        assert!(is_base58("abcXYZ123"));
+        assert!(!is_base58("")); // empty
+        assert!(!is_base58("0OIl")); // base58 excludes 0 O I l
+        assert!(is_bech32_either("QPZRY")); // case-insensitive
+        assert!(!is_bech32_either(""));
+        assert!(!is_bech32_either("bob")); // 'o','b' not in bech32
+        assert!(is_base32_either("abc234"));
+        assert!(!is_base32_either("")); // empty
+        assert!(!is_base32_either("089")); // 0,8,9 not in base32
+        assert!(all_in("abc", "abcdef"));
+        assert!(!all_in("abx", "abcdef"));
+        assert!(is_base64url_nopad("Ab9-_"));
+        assert!(!is_base64url_nopad(""));
+        assert!(!is_base64url_nopad("a+b")); // '+' not url-safe
+    }
+
+    // ===================================================================
+    // CESR
+    // ===================================================================
+    #[test]
+    fn cesr_empty_and_nonmatch() {
+        assert!(parse_cesr("").unwrap().is_none());
+        // first char '0' but wrong length
+        assert!(parse_cesr("0AshortXX").unwrap().is_none());
+        // valid-length one-char code but non-base64url char present
+        let bad = format!("D{}", "*".repeat(43));
+        assert!(parse_cesr(&bad).unwrap().is_none());
+    }
+
+    #[test]
+    fn cesr_two_and_four_char_codes() {
+        let two = format!("0A{}", "A".repeat(22)); // 24 chars total
+        let p = parse_cesr(&two).unwrap().unwrap();
+        assert_eq!(p.type_name, "CESR random 128-bit number");
+        let four = format!("1AAA{}", "A".repeat(44)); // 48 chars total
+        let p = parse_cesr(&four).unwrap().unwrap();
+        assert_eq!(p.type_name, "CESR secp256k1 nt pubkey");
+    }
+
+    // ===================================================================
+    // SSH keys
+    // ===================================================================
+    #[test]
+    fn ssh_rsa_and_ecdsa() {
+        let rsa = parse(
+            "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDSD+oM4kLidAptE5pjRA8OBIWNysc9reQJjK comment",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(rsa.type_name, "SSH rsa");
+        // rsa prefix_length is 28 chars (longer than the 24-char match string).
+        assert_eq!(rsa.prefix.as_deref(), Some("AAAAB3NzaC1yc2EAAAADAQABAAAB"));
+        let ec = parse("AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBNSBA0Md9MCwp")
+            .unwrap()
+            .unwrap();
+        assert_eq!(ec.type_name, "SSH ecdsa-nistp256");
+    }
+
+    #[test]
+    fn ssh_bare_blob_fallback() {
+        // AAAA-prefixed blob that matches no known key type -> generic "SSH key".
+        let p = parse_ssh_key("AAAAXabcd1234").unwrap().unwrap();
+        assert_eq!(p.type_name, "SSH key");
+        assert_eq!(p.prefix.as_deref(), Some("AAAA"));
+        // Not an SSH blob at all.
+        assert!(parse_ssh_key("not a key").unwrap().is_none());
+    }
+
+    #[test]
+    fn ssh_bare_aaaa_only_is_none() {
+        // payload is exactly "AAAA" -> empty body -> Ok(None) fall-through.
+        assert!(parse_ssh_key("AAAA").unwrap().is_none());
+    }
+
+    #[test]
+    fn ssh_key_regex_branches() {
+        assert!(ssh_key_regex("BBBBxxxx").is_none()); // no AAAA prefix
+        assert!(ssh_key_regex("AAAA").is_none()); // empty rest
+        assert!(ssh_key_regex("AAAA=abc").is_none()); // body starts with '='
+        assert!(ssh_key_regex("AAAAab====").is_none()); // >3 padding
+        let (pre, rest) = ssh_key_regex("AAAAabcd==").unwrap();
+        assert_eq!(pre, "AAAA");
+        assert_eq!(rest, "abcd==");
+    }
+
+    #[test]
+    fn ssh_line_split_branches() {
+        let (payload, comment) = ssh_line_split("ssh-rsa AAAAB3Nz hello").unwrap();
+        assert_eq!(payload, "AAAAB3Nz");
+        assert_eq!(comment.as_deref(), Some("hello"));
+        // padding consumed, no comment
+        let (payload, comment) = ssh_line_split("AAAAabcd==").unwrap();
+        assert_eq!(payload, "AAAAabcd==");
+        assert!(comment.is_none());
+        // type token present but no AAAA payload -> None
+        assert!(ssh_line_split("ssh-rsa notbase64").is_none());
+        // trailing non-whitespace immediately after payload -> None
+        assert!(ssh_line_split("AAAAabcd!x").is_none());
+        // no recognizable payload at all
+        assert!(ssh_line_split("zzz").is_none());
+    }
+
+    // ===================================================================
+    // Bitcoin / Ripple / Litecoin / BCH / Stellar
+    // ===================================================================
+    #[test]
+    fn bitcoin_legacy_and_segwit() {
+        let legacy = parse_bitcoin_address(&format!("1{}", "a".repeat(33)))
+            .unwrap()
+            .unwrap();
+        assert_eq!(legacy.type_name, "BTC legacy");
+        assert_eq!(legacy.prefix.as_deref(), Some("1"));
+        assert_eq!(legacy.suffix.as_ref().unwrap().chars().count(), 4);
+        let segwit = parse_bitcoin_address(&format!("bc1{}", "q".repeat(39)))
+            .unwrap()
+            .unwrap();
+        assert_eq!(segwit.type_name, "BTC SegWit");
+        // too-short body -> no match
+        assert!(parse_bitcoin_address(&format!("1{}", "a".repeat(20)))
+            .unwrap()
+            .is_none());
+        // wrong leading char -> no match
+        assert!(parse_bitcoin_address(&format!("z{}", "a".repeat(33)))
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn match_prefix_bech32_none() {
+        assert!(match_prefix_bech32("zzz", &["bc1"], 10, 20).is_none());
+        // right prefix, body too short
+        assert!(match_prefix_bech32("bc1qq", &["bc1"], 10, 20).is_none());
+    }
+
+    #[test]
+    fn ripple_address() {
+        let p = parse("rUocf1ixKzTuEe34kmVhRvGqNCofY1NJzV")
+            .unwrap()
+            .unwrap();
+        assert_eq!(p.type_name, "XRP");
+        assert_eq!(p.prefix.as_deref(), Some("r"));
+        // wrong length
+        assert!(parse_ripple_address("rabc").unwrap().is_none());
+    }
+
+    #[test]
+    fn litecoin_legacy_and_bech32() {
+        let legacy = parse_litecoin_address(&format!("L{}", "a".repeat(33)))
+            .unwrap()
+            .unwrap();
+        assert_eq!(legacy.type_name, "LTC legacy");
+        let tlegacy = parse_litecoin_address(&format!("tL{}", "a".repeat(33)))
+            .unwrap()
+            .unwrap();
+        assert_eq!(tlegacy.prefix.as_deref(), Some("tL"));
+        let bech = parse("ltc1qhw6dgkk52v9eqzukju7vrqpw0jt4wll6e6n4q5")
+            .unwrap()
+            .unwrap();
+        assert_eq!(bech.type_name, "LTC");
+        assert!(parse_litecoin_address("Lshort").unwrap().is_none());
+    }
+
+    #[test]
+    fn bitcoin_cash_with_and_without_prefix() {
+        let p = parse("bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a")
+            .unwrap()
+            .unwrap();
+        assert_eq!(p.type_name, "BCH");
+        assert_eq!(p.prefix.as_deref(), Some("bitcoincash:"));
+        // bchtest prefix branch
+        let t = parse_bitcoin_cash_address(&format!("bchtest:q{}", "q".repeat(41)))
+            .unwrap()
+            .unwrap();
+        assert_eq!(t.prefix.as_deref(), Some("bchtest:"));
+        // bare p/q body, no prefix
+        let bare = parse_bitcoin_cash_address(&format!("p{}", "q".repeat(41)))
+            .unwrap()
+            .unwrap();
+        assert!(bare.prefix.is_none());
+        // wrong leading char
+        assert!(parse_bitcoin_cash_address(&format!("z{}", "q".repeat(41)))
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn stellar_public_and_muxed() {
+        let g = parse("GCKFBEIYTKP5RDBQMUTAPDCDHF2TR4LPNRGW4JBQQTQUYZP4LDKP3SGM")
+            .unwrap()
+            .unwrap();
+        assert_eq!(g.type_name, "XLM");
+        assert_eq!(g.prefix.as_deref(), Some("G"));
+        let m = parse("MA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVAAAAAAAAAAAAAJLK")
+            .unwrap()
+            .unwrap();
+        assert_eq!(m.type_name, "XLM muxed");
+        assert_eq!(m.prefix.as_deref(), Some("M"));
+        // wrong length
+        assert!(parse_stellar_address("Gabc").unwrap().is_none());
+    }
+
+    // ===================================================================
+    // UUID / ULID / Snowflake / LEI
+    // ===================================================================
+    #[test]
+    fn uuid_braced_and_invalid() {
+        let braced = parse_uuid("{550e8400-e29b-41d4-a716-446655440000}")
+            .unwrap()
+            .unwrap();
+        assert_eq!(braced.core, "550e8400e29b41d4a716446655440000");
+        // 31 hex digits -> wrong total length
+        assert!(parse_uuid("550e8400e29b41d4a71644665544000")
+            .unwrap()
+            .is_none());
+        // misplaced dash -> structure check fails
+        assert!(parse_uuid("550e84-00e29b41d4a716446655440000")
+            .unwrap()
+            .is_none());
+        // non-hex
+        assert!(parse_uuid("zzze8400e29b41d4a716446655440000")
+            .unwrap()
+            .is_none());
+        // valid 8-4-4-4-12 but trailing dash leaves unconsumed input
+        assert!(parse_uuid("550e8400-e29b-41d4-a716-446655440000-")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn ulid_valid_and_aliases_and_invalid() {
+        let p = parse("01ARZ3NDEKTSV4RRFFQ69G5FAV").unwrap().unwrap();
+        assert_eq!(p.type_name, "ULID");
+        // I/L/O aliases get normalized to 1/1/0
+        let aliased = parse_ulid(&format!("OIL{}A", "0".repeat(22)))
+            .unwrap()
+            .unwrap();
+        assert!(!aliased.core.contains('O'));
+        assert!(!aliased.core.contains('I'));
+        assert!(!aliased.core.contains('L'));
+        // wrong length
+        assert!(parse_ulid("01ARZ3").unwrap().is_none());
+        // 'U' is disallowed in ULID
+        assert!(parse_ulid(&format!("U{}", "0".repeat(25)))
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn snowflake_branches() {
+        assert_eq!(
+            parse("80351110224678912").unwrap().unwrap().type_name,
+            "snowflake"
+        );
+        // too few / too many digits
+        assert!(parse_snowflake("123").unwrap().is_none());
+        // non-digit
+        assert!(parse_snowflake("8035111022467891x").unwrap().is_none());
+        // 19 digits but value exceeds 63 bits (high bit set)
+        assert!(parse_snowflake("9300000000000000000").unwrap().is_none());
+    }
+
+    #[test]
+    fn lei_branches() {
+        let p = parse("5493001KJTIIGC8Y1R12").unwrap().unwrap();
+        assert_eq!(p.type_name, "LEI");
+        // positions [4:6] must be "00"
+        assert!(parse_lei("5493991KJTIIGC8Y1R12").unwrap().is_none());
+        // wrong length
+        assert!(parse_lei("549300").unwrap().is_none());
+        // valid structure but bad checksum
+        assert!(parse_lei("5493001KJTIIGC8Y1R99").unwrap().is_none());
+    }
+
+    #[test]
+    fn lei_checksum_helper() {
+        assert!(lei_checksum_ok("5493001KJTIIGC8Y1R12"));
+        // lowercase / non-alnum chars make the helper reject
+        assert!(!lei_checksum_ok("abc def"));
+    }
+
+    // ===================================================================
+    // SWHID / gitoid
+    // ===================================================================
+    #[test]
+    fn swhid_with_qualifiers() {
+        // a `;`-separated qualifier tail is allowed and stripped from the core.
+        let p = parse_swhid("swh:1:rev:309cf2674ee7a0749978cf8265ab91a60aea0f7d;origin=https://x")
+            .unwrap()
+            .unwrap();
+        assert_eq!(p.core, "309cf2674ee7a0749978cf8265ab91a60aea0f7d");
+        assert!(p.prefix_semantic);
+    }
+
+    #[test]
+    fn gitoid_too_few_parts() {
+        // splitn yields < 4 colon-separated parts.
+        assert!(parse_gitoid("gitoid:blob").unwrap().is_none());
+    }
+
+    #[test]
+    fn bech32_separator_at_index_zero_is_skipped() {
+        // '1' at index 0 gives sep=0, outside the 1..=83 hrp range -> skipped.
+        assert!(parse_bech32_address(&format!("1{}", "q".repeat(10)))
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn swhid_and_gitoid_negatives() {
+        // unknown object type
+        assert!(
+            parse_swhid("swh:1:zzz:309cf2674ee7a0749978cf8265ab91a60aea0f7d")
+                .unwrap()
+                .is_none()
+        );
+        // gitoid bad algo
+        assert!(parse_gitoid("gitoid:blob:md5:abcd").unwrap().is_none());
+        // gitoid wrong hash length
+        assert!(parse_gitoid("gitoid:blob:sha1:abcd").unwrap().is_none());
+        // gitoid bad object type
+        assert!(
+            parse_gitoid("gitoid:zzz:sha1:309cf2674ee7a0749978cf8265ab91a60aea0f7d")
+                .unwrap()
+                .is_none()
+        );
+        // not a gitoid at all
+        assert!(parse_gitoid("hello").unwrap().is_none());
+        // gitoid sha256 happy path
+        let g = parse_gitoid(
+            "gitoid:blob:sha256:473a0f4c3be8a93681a267e3b1e9a7dcda1185436fe141f7749120a303721813",
+        )
+        .unwrap()
+        .unwrap();
+        assert!(g.prefix_semantic);
+    }
+
+    // ===================================================================
+    // bech32 checksum internals + generic bech32 address
+    // ===================================================================
+    #[test]
+    fn bech32_polymod_and_expand() {
+        assert_eq!(bech32_polymod(&[]), 1);
+        assert_eq!(bech32_hrp_expand("a"), vec![3, 0, 1]); // 'a'=0x61
+    }
+
+    #[test]
+    fn bech32_generic_cosmos() {
+        let p = parse_bech32_address("cosmos1qqqsyqcyq5rqwzqfpg9scrgwpugpzysnrk363e")
+            .unwrap()
+            .unwrap();
+        assert_eq!(p.type_name, "bech32");
+        assert_eq!(p.prefix.as_deref(), Some("cosmos1"));
+        // no separator '1' -> no match
+        assert!(parse_bech32_address("cosmosqqqq").unwrap().is_none());
+        // bad checksum -> no match
+        assert!(
+            parse_bech32_address("cosmos1qqqsyqcyq5rqwzqfpg9scrgwpugpzysnrk3630")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    // ===================================================================
+    // IPFS CID + multicodec/multihash/base32/uvarint
+    // ===================================================================
+    #[test]
+    fn cid_v0_and_v1_raw() {
+        let v0 = parse("QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG")
+            .unwrap()
+            .unwrap();
+        assert_eq!(v0.type_name, "CIDv0");
+        let raw = parse("bafkreigh2akiscaildcqabsyg3dfr6chu3fgpregiymsck7e7aqa4s52zy")
+            .unwrap()
+            .unwrap();
+        assert_eq!(raw.type_name, "CIDv1 raw");
+    }
+
+    #[test]
+    fn b32_decode_multicodec_direct() {
+        let body = "afybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi";
+        let (codec, hash) = b32_decode_multicodec(body).unwrap();
+        assert_eq!(codec, "dag-pb");
+        assert_eq!(hash, "sha2-256");
+    }
+
+    #[test]
+    fn multicodec_and_multihash_tables() {
+        let codecs = [
+            (0x00u64, "identity"),
+            (0x51, "cbor"),
+            (0x55, "raw"),
+            (0x60, "rlp"),
+            (0x70, "dag-pb"),
+            (0x71, "dag-cbor"),
+            (0x72, "libp2p-key"),
+            (0x78, "git-raw"),
+            (0x90, "eth-block"),
+            (0x97, "eth-tx"),
+            (0x0129, "dag-json"),
+            (0x0202, "car"),
+        ];
+        for (code, name) in codecs {
+            assert_eq!(multicodec_content(code), Some(name));
+        }
+        assert_eq!(multicodec_content(0xdead), None);
+
+        let hashes = [
+            (0x11u64, "sha1"),
+            (0x12, "sha2-256"),
+            (0x13, "sha2-512"),
+            (0x14, "sha3-224"),
+            (0x15, "sha3-256"),
+            (0x16, "sha3-384"),
+            (0x17, "sha3-512"),
+            (0x1b, "keccak-256"),
+            (0x41, "blake2b-256"),
+        ];
+        for (code, name) in hashes {
+            assert_eq!(multihash_func(code), Some(name));
+        }
+        assert_eq!(multihash_func(0xff), None);
+    }
+
+    #[test]
+    fn base32_decode_and_uvarint() {
+        assert_eq!(base32_decode("MZXW6"), Some(b"foo".to_vec()));
+        assert_eq!(base32_decode("0"), None); // '0' not in RFC4648 base32
+        assert_eq!(read_uvarint(&[0x01], 0), Some((1, 1)));
+        assert_eq!(read_uvarint(&[0xAC, 0x02], 0), Some((300, 2)));
+        assert_eq!(read_uvarint(&[0x80], 0), None); // truncated (continuation bit, no next byte)
+    }
+
+    // ===================================================================
+    // hex / EOS
+    // ===================================================================
+    #[test]
+    fn hex_branches() {
+        assert_eq!(
+            parse_hex("0x1234").unwrap().unwrap().prefix.as_deref(),
+            Some("0x")
+        );
+        assert_eq!(parse_hex("abcd").unwrap().unwrap().type_name, "hex");
+        assert!(parse_hex("").unwrap().is_none()); // empty
+        assert!(parse_hex("abc").unwrap().is_none()); // odd length, no prefix
+        assert!(parse_hex("zzzz").unwrap().is_none()); // not hex
+    }
+
+    #[test]
+    fn eos_branches() {
+        let p = parse_eos_address("eosaccount1").unwrap().unwrap();
+        assert_eq!(p.type_name, "EOS");
+        // 13-char form (form 2): {12}[a-j1-5]
+        assert!(eos_regex(&format!("{}a", "a".repeat(12))));
+        // all-hex input is rejected as EOS (would be hex instead)
+        assert!(parse_eos_address("abcdef").unwrap().is_none());
+        // illegal char
+        assert!(parse_eos_address("EOS!!").unwrap().is_none());
+    }
+
+    // ===================================================================
+    // EIP-55 validation
+    // ===================================================================
+    #[test]
+    fn eip55_no_prefix_paths() {
+        // mixed-case 40-hex without 0x prefix, valid checksum -> ETH
+        let p = parse_ethereum_address("5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed")
+            .unwrap()
+            .unwrap();
+        assert_eq!(p.type_name, "ETH");
+        // all-lowercase, no prefix, not mixed -> None (defers to hex parser)
+        assert!(
+            parse_ethereum_address("5aaeb6053f3e94c9b9a09f33669435e7ef1beaed")
+                .unwrap()
+                .is_none()
+        );
+        // wrong length
+        assert!(parse_ethereum_address("0x1234").unwrap().is_none());
+        // mixed-case bad checksum -> hard error
+        assert!(matches!(
+            parse_ethereum_address("5aaeb6053F3E94C9b9A09f33669435E7Ef1BeAed"),
+            Err(ParseError::Eip55 { .. })
+        ));
+    }
+
+    #[test]
+    fn validate_eip55_direct() {
+        assert!(validate_eip55("5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed").is_ok());
+        assert!(matches!(
+            validate_eip55("5AAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"),
+            Err(ParseError::Eip55 { .. })
+        ));
+    }
+
+    // ===================================================================
+    // Disproof-based alphabet detection + parse() core casing
+    // ===================================================================
+    #[test]
+    fn detect_alphabet_by_disproof_branches() {
+        assert!(detect_alphabet_by_disproof("").is_none());
+        assert_eq!(
+            detect_alphabet_by_disproof("abcdef0123").unwrap().name,
+            "hex"
+        );
+        assert_eq!(
+            detect_alphabet_by_disproof("wxyz67").unwrap().name,
+            "base32"
+        );
+        assert_eq!(
+            detect_alphabet_by_disproof("qpz089").unwrap().name,
+            "bech32"
+        );
+        assert_eq!(detect_alphabet_by_disproof("ABC+/").unwrap().name, "base64");
+        assert_eq!(
+            detect_alphabet_by_disproof("ABC-_").unwrap().name,
+            "base64url"
+        );
+    }
+
+    #[test]
+    fn parse_falls_back_to_detected_alphabet_with_casing() {
+        // base32 fallback uppercases the core
+        let p = parse("wxyz67wxyz67").unwrap().unwrap();
+        assert_eq!(p.type_name, "base32");
+        assert_eq!(p.core, "WXYZ67WXYZ67");
+        // bech32 fallback lowercases the core
+        let p = parse("QPZ08QPZ08").unwrap().unwrap();
+        assert_eq!(p.type_name, "bech32");
+        assert_eq!(p.core, "qpz08qpz08");
+    }
+
+    // ===================================================================
+    // Large-input tokenization helpers
+    // ===================================================================
+    #[test]
+    fn crockford5_encoding() {
+        assert_eq!(crockford5(0), "00000");
+        assert_eq!(crockford5(0x1F), "0000z"); // last symbol, lowercased
+        assert_eq!(crockford5(1), "00001");
+        assert_eq!(crockford5(0xFFFFFF).chars().count(), 5);
+    }
+
+    #[test]
+    fn core_byte_length_helper() {
+        // hex: 4 bits/char -> 2 chars per byte
+        assert_eq!(core_byte_length("abcd", &HEX), 2);
+        // base64: 6 bits/char
+        assert_eq!(core_byte_length("AAAA", &BASE64), 3);
+    }
+
+    #[test]
+    fn tokenize_entropy_small_is_not_truncated() {
+        let (toks, truncated) = tokenize_entropy("0123456789abcdef", &HEX);
+        assert!(!truncated);
+        assert_eq!(toks.len(), 3);
+    }
+
+    #[test]
+    fn tokenize_entropy_large_is_truncated_with_middle() {
+        // 200 hex chars -> > 22 tokens / > 64 bytes -> head+middle+tail layout.
+        let core = "a".repeat(200);
+        let (toks, truncated) = tokenize_entropy(&core, &HEX);
+        assert!(truncated);
+        assert_eq!(toks.len(), 8 + 4 + 8); // head + fingerprint-middle + tail
+                                           // indices are renumbered 0..20
+        for (i, t) in toks.iter().enumerate() {
+            assert_eq!(t.index, i);
+        }
+        // the 4 middle tokens are crockford5 of the second digest
+        let second = second_digest(&core);
+        for i in 0..4 {
+            let quant = ((second[3 * i] as u32) << 16)
+                | ((second[3 * i + 1] as u32) << 8)
+                | (second[3 * i + 2] as u32);
+            assert_eq!(toks[8 + i].text, crockford5(quant));
+        }
+    }
 }
