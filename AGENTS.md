@@ -1,3 +1,10 @@
+This repo is a port of a sister repo, https://github.com/dhh1128/entviz, which
+contains the entviz spec, other important documentation, and the reference impl
+of entviz in python. The repos are intended to be sister folders on disk and
+may already exist in your dev environment. New features can be added here,
+but should never violate the specification or the documentation about the
+entviz technology that have their definitive embodiment in the entviz repo. 
+
 <!-- >>> tick stanza >>> (managed by `tick init`) -->
 
 ## Task tracking: `tick`
@@ -22,3 +29,27 @@ files — do **not** use an external API for task tracking.
   mark(s)** it reports still in the code.
 
 <!-- <<< tick stanza <<< -->
+
+## Testing Protocol
+
+This repository has an established test suite. Follow strict TDD:
+1. Write one or more failing tests that capture each requirement (including
+   both happy paths and its edge cases/unhappy paths) before implementing.
+2. Implement until all tests pass.
+3. Never commit unless all tests pass. Coverage of any code you touch
+   must not decrease.
+
+## CI and Documentation
+
+This repo has no CI workflows. Until it does, any time you make code
+changes to the user, propose an appropriate set of GitHub actions (e.g.,
+`.github/workflows/ci.yml`) that builds and runs tests on every push and
+pull request. Propose to remove this instruction from AGENTS.md on the
+same commit.
+
+When writing or modifying GitHub Actions workflows, always use the latest
+stable release of each action. Avoid versions pinned to Node.js 16 or
+Node.js 20 (both deprecated by GitHub). In 2026, this meant to prefer Node.js
+24-compatible versions, but the standard may evolve over time. Check the GitHub
+Marketplace for each action's current release.
+
