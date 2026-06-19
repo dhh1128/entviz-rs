@@ -36,6 +36,35 @@ jobs:
       - name: Test
         run: cargo test --locked
 
+  coverage:
+    name: coverage floor
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          toolchain: stable
+          components: llvm-tools-preview
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+
+      - uses: taiki-e/install-action@b8cecb83565409bcc297b2df6e77f030b2a468d5  # v2.82.0
+        with:
+          tool: cargo-llvm-cov
+
+      # Hard coverage gate. Default features only: the off-by-default
+      # `adversarial` module (model.rs) is excluded from the public impl and is
+      # not counted here. The reference corpus is intentionally NOT checked out —
+      # the unit + CLI tests already exercise every path the corpus does, so the
+      # floor is self-contained and deterministic. Line coverage currently sits
+      # ~99%; the floors leave ~1% of jitter headroom. --fail-under-file-lines
+      # additionally catches a single new file landing well below the average.
+      - name: Coverage (fail under floor)
+        run: cargo llvm-cov --locked --fail-under-lines 98 --fail-under-file-lines 90
+
   conformance:
     name: spec-sync + Tier-A conformance
     runs-on: ubuntu-latest
