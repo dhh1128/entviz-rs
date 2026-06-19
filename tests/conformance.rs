@@ -16,7 +16,11 @@ use serde_json::Value;
 
 fn corpus_dir() -> Option<PathBuf> {
     let here = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let dir = here.parent()?.join("entviz").join("compliance").join("corpus");
+    let dir = here
+        .parent()?
+        .join("entviz")
+        .join("compliance")
+        .join("corpus");
     if dir.join("manifest.json").is_file() {
         Some(dir)
     } else {
@@ -71,5 +75,9 @@ fn corpus_render_and_error_contract() {
         }
     }
 
-    assert!(failures.is_empty(), "conformance contract failures:\n{}", failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "conformance contract failures:\n{}",
+        failures.join("\n")
+    );
 }

@@ -40,7 +40,11 @@ pub struct Alphabet {
     pub bits_per_char: u32,
 }
 
-pub const HEX: Alphabet = Alphabet { name: "hex", chars: "0123456789ABCDEF", bits_per_char: 4 };
+pub const HEX: Alphabet = Alphabet {
+    name: "hex",
+    chars: "0123456789ABCDEF",
+    bits_per_char: 4,
+};
 pub const BASE64URL: Alphabet = Alphabet {
     name: "base64url",
     chars: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_",
@@ -111,7 +115,11 @@ pub fn tokenize(text: &str, alphabet: &Alphabet) -> Vec<Token> {
             quant = val & 0xFFFFFF;
         }
         let index = tokens.len();
-        tokens.push(Token { text: chunk, index, quant: quant & 0xFFFFFF });
+        tokens.push(Token {
+            text: chunk,
+            index,
+            quant: quant & 0xFFFFFF,
+        });
     }
     tokens
 }
@@ -155,11 +163,15 @@ pub fn quartile_tokens(tokens: &[Token]) -> Vec<Option<Token>> {
     let rev = |t: &Token| -> String { t.text.chars().rev().collect() };
     let mut s: Vec<&Token> = tokens.iter().collect();
     s.sort_by(|a, b| rev(a).cmp(&rev(b)).then(a.index.cmp(&b.index)));
-    let q_size = (s.len() + 3) / 4; // ceil(n/4)
+    let q_size = s.len().div_ceil(4); // ceil(n/4)
     (0..4)
         .map(|i| {
             let idx = i * q_size;
-            if idx < s.len() { Some(s[idx].clone()) } else { None }
+            if idx < s.len() {
+                Some(s[idx].clone())
+            } else {
+                None
+            }
         })
         .collect()
 }
@@ -167,11 +179,14 @@ pub fn quartile_tokens(tokens: &[Token]) -> Vec<Option<Token>> {
 // --------------------------------------------------------------------------
 // Colors (Oklab)
 // --------------------------------------------------------------------------
-pub const POSSIBLE_EDGE_COLORS: [&str; 5] =
-    ["#ffffff", "#e7be00", "#ff3f2f", "#2f3fbf", "#000000"];
+pub const POSSIBLE_EDGE_COLORS: [&str; 5] = ["#ffffff", "#e7be00", "#ff3f2f", "#2f3fbf", "#000000"];
 
 fn srgb_to_linear(c: f64) -> f64 {
-    if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
 }
 
 pub fn oklab_lightness(r: u8, g: u8, b: u8) -> f64 {
@@ -192,7 +207,11 @@ pub fn nucleus_colors(quant: u32) -> (String, String) {
     let g = ((quant >> 8) & 0xFF) as u8;
     let b = ((quant >> 16) & 0xFF) as u8;
     let bg = format!("#{:02x}{:02x}{:02x}", r, g, b);
-    let fg = if oklab_lightness(r, g, b) < OKLAB_THRESHOLD { "#ffffff" } else { "#000000" };
+    let fg = if oklab_lightness(r, g, b) < OKLAB_THRESHOLD {
+        "#ffffff"
+    } else {
+        "#000000"
+    };
     (bg, fg.to_string())
 }
 
@@ -236,7 +255,10 @@ pub fn select_visual_style(median_ftok: &Token) -> VisualStyle {
         .filter(|(i, _)| *i != idx)
         .map(|(_, c)| c.to_string())
         .collect();
-    VisualStyle { bg_color, edge_colors }
+    VisualStyle {
+        bg_color,
+        edge_colors,
+    }
 }
 
 // --------------------------------------------------------------------------
@@ -253,11 +275,15 @@ pub fn choose_grid(token_count: usize, target_ar: f64) -> Grid {
     let mut tightest: BTreeMap<usize, usize> = BTreeMap::new();
     let mut cols = 2;
     while cols <= token_count {
-        let rows = (token_count + cols - 1) / cols; // ceil
+        let rows = token_count.div_ceil(cols); // ceil
         if rows >= 2 {
             tightest
                 .entry(rows)
-                .and_modify(|c| { if cols < *c { *c = cols; } })
+                .and_modify(|c| {
+                    if cols < *c {
+                        *c = cols;
+                    }
+                })
                 .or_insert(cols);
         }
         cols += 1;
@@ -267,16 +293,29 @@ pub fn choose_grid(token_count: usize, target_ar: f64) -> Grid {
         .map(|(&rows, &cols)| (cols, rows, (cols as f64 * 3.0) / (rows as f64 * 2.0)))
         .collect();
     if candidates.is_empty() {
-        return Grid { cols: 2, rows: 2, token_count };
+        return Grid {
+            cols: 2,
+            rows: 2,
+            token_count,
+        };
     }
-    let above: Vec<&(usize, usize, f64)> =
-        candidates.iter().filter(|c| c.2 >= target_ar).collect();
+    let above: Vec<&(usize, usize, f64)> = candidates.iter().filter(|c| c.2 >= target_ar).collect();
     let chosen = if !above.is_empty() {
-        above.iter().min_by(|a, b| (a.2 - target_ar).partial_cmp(&(b.2 - target_ar)).unwrap()).unwrap()
+        above
+            .iter()
+            .min_by(|a, b| (a.2 - target_ar).partial_cmp(&(b.2 - target_ar)).unwrap())
+            .unwrap()
     } else {
-        candidates.iter().max_by(|a, b| a.2.partial_cmp(&b.2).unwrap()).unwrap()
+        candidates
+            .iter()
+            .max_by(|a, b| a.2.partial_cmp(&b.2).unwrap())
+            .unwrap()
     };
-    Grid { cols: chosen.0, rows: chosen.1, token_count }
+    Grid {
+        cols: chosen.0,
+        rows: chosen.1,
+        token_count,
+    }
 }
 
 // --------------------------------------------------------------------------

@@ -42,7 +42,9 @@ fn main() {
         Err(e) => fail(2, &format!("invalid request JSON: {e}")),
     };
 
-    let core = req["core"].as_str().unwrap_or_else(|| fail(2, "missing `core`"));
+    let core = req["core"]
+        .as_str()
+        .unwrap_or_else(|| fail(2, "missing `core`"));
     // fingerprint_core defaults to core when absent.
     let fp_core = req["fingerprint_core"].as_str().unwrap_or(core);
     let target_ar = req["target_ar"].as_f64().unwrap_or(1.0);
@@ -51,8 +53,12 @@ fn main() {
     let raw_bytes = req["raw_bytes"].as_u64().unwrap_or(0) as usize;
 
     let alph = &req["alphabet"];
-    let name = alph["name"].as_str().unwrap_or_else(|| fail(2, "missing alphabet.name"));
-    let chars = alph["chars"].as_str().unwrap_or_else(|| fail(2, "missing alphabet.chars"));
+    let name = alph["name"]
+        .as_str()
+        .unwrap_or_else(|| fail(2, "missing alphabet.name"));
+    let chars = alph["chars"]
+        .as_str()
+        .unwrap_or_else(|| fail(2, "missing alphabet.chars"));
     let bits = alph["bits_per_char"]
         .as_u64()
         .unwrap_or_else(|| fail(2, "missing alphabet.bits_per_char")) as u32;
@@ -88,8 +94,15 @@ fn main() {
         return;
     }
 
-    match compute_render_model_fp(core, fp_core, &alphabet, target_ar, font_pt, bottom_strip, raw_bytes)
-    {
+    match compute_render_model_fp(
+        core,
+        fp_core,
+        &alphabet,
+        target_ar,
+        font_pt,
+        bottom_strip,
+        raw_bytes,
+    ) {
         Ok(model) => {
             println!("{}", model.to_golden_json());
         }

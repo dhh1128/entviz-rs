@@ -46,6 +46,10 @@ fn rotl64(x: u64, n: u32) -> u64 {
     x.rotate_left(n & 63)
 }
 
+// The explicit x/y lane indices below mirror the Keccak-f[1600] spec
+// (Bertoni et al.); rewriting them as iterator chains would obscure the
+// modular index arithmetic and invite transcription bugs in a crypto kernel.
+#[allow(clippy::needless_range_loop)]
 fn keccak_f1600(state: &mut [[u64; 5]; 5]) {
     for &rc in RC.iter() {
         // Theta
@@ -129,7 +133,10 @@ pub fn keccak256(data: &[u8]) -> [u8; 32] {
 
 /// Hex (lowercase) of the Keccak-256 digest.
 pub fn keccak256_hex(data: &[u8]) -> String {
-    keccak256(data).iter().map(|b| format!("{:02x}", b)).collect()
+    keccak256(data)
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect()
 }
 
 #[cfg(test)]

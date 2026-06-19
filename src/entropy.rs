@@ -12,7 +12,11 @@ use crate::Alphabet;
 // --------------------------------------------------------------------------
 // Alphabets (mirror entropy.py)
 // --------------------------------------------------------------------------
-pub const HEX: Alphabet = Alphabet { name: "hex", chars: "0123456789ABCDEF", bits_per_char: 4 };
+pub const HEX: Alphabet = Alphabet {
+    name: "hex",
+    chars: "0123456789ABCDEF",
+    bits_per_char: 4,
+};
 pub const BASE58: Alphabet = Alphabet {
     name: "base58",
     chars: "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz",
@@ -23,15 +27,31 @@ pub const BASE64: Alphabet = Alphabet {
     chars: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
     bits_per_char: 6,
 };
-pub const BASE32: Alphabet =
-    Alphabet { name: "base32", chars: "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567", bits_per_char: 5 };
-pub const BECH32: Alphabet =
-    Alphabet { name: "bech32", chars: "qpzry9x8gf2tvdw0s3jn54khce6mua7l", bits_per_char: 5 };
-pub const CROCKFORD32: Alphabet =
-    Alphabet { name: "crockford32", chars: "0123456789ABCDEFGHJKMNPQRSTVWXYZ", bits_per_char: 5 };
-pub const BASE36: Alphabet =
-    Alphabet { name: "base36", chars: "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ", bits_per_char: 6 };
-pub const DECIMAL: Alphabet = Alphabet { name: "decimal", chars: "0123456789", bits_per_char: 4 };
+pub const BASE32: Alphabet = Alphabet {
+    name: "base32",
+    chars: "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567",
+    bits_per_char: 5,
+};
+pub const BECH32: Alphabet = Alphabet {
+    name: "bech32",
+    chars: "qpzry9x8gf2tvdw0s3jn54khce6mua7l",
+    bits_per_char: 5,
+};
+pub const CROCKFORD32: Alphabet = Alphabet {
+    name: "crockford32",
+    chars: "0123456789ABCDEFGHJKMNPQRSTVWXYZ",
+    bits_per_char: 5,
+};
+pub const BASE36: Alphabet = Alphabet {
+    name: "base36",
+    chars: "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    bits_per_char: 6,
+};
+pub const DECIMAL: Alphabet = Alphabet {
+    name: "decimal",
+    chars: "0123456789",
+    bits_per_char: 4,
+};
 pub const BASE64URL: Alphabet = Alphabet {
     name: "base64url",
     chars: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_",
@@ -61,7 +81,14 @@ impl Parsed {
         core: String,
         suffix: Option<String>,
     ) -> Parsed {
-        Parsed { type_name: type_name.to_string(), alphabet, prefix, core, suffix, prefix_semantic: false }
+        Parsed {
+            type_name: type_name.to_string(),
+            alphabet,
+            prefix,
+            core,
+            suffix,
+            prefix_semantic: false,
+        }
     }
     fn semantic(mut self) -> Parsed {
         self.prefix_semantic = true;
@@ -158,21 +185,41 @@ fn parse_cesr(text: &str) -> PResult {
     };
     for &(code, label, total) in items {
         if text.starts_with(code) && len == total && is_base64url_nopad(text) {
-            return Ok(Some(Parsed::new(&format!("CESR {label}"), BASE64URL, None, text.to_string(), None)));
+            return Ok(Some(Parsed::new(
+                &format!("CESR {label}"),
+                BASE64URL,
+                None,
+                text.to_string(),
+                None,
+            )));
         }
     }
     Ok(None)
 }
 
 fn is_base64url_nopad(s: &str) -> bool {
-    !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 // SSH key type prefixes: (short_name, match_str, prefix_length).
 const SSH_KEY_TYPES: &[(&str, &str, usize)] = &[
-    ("ecdsa-nistp256", "AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABB", 52),
-    ("ecdsa-nistp384", "AAAAE2VjZHNhLXNoYTItbmlzdHAzODQAAAAIbmlzdHAzODQAAABh", 52),
-    ("ecdsa-nistp521", "AAAAE2VjZHNhLXNoYTItbmlzdHA1MjEAAAAIbmlzdHA1MjEAAACF", 52),
+    (
+        "ecdsa-nistp256",
+        "AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABB",
+        52,
+    ),
+    (
+        "ecdsa-nistp384",
+        "AAAAE2VjZHNhLXNoYTItbmlzdHAzODQAAAAIbmlzdHAzODQAAABh",
+        52,
+    ),
+    (
+        "ecdsa-nistp521",
+        "AAAAE2VjZHNhLXNoYTItbmlzdHA1MjEAAAAIbmlzdHA1MjEAAACF",
+        52,
+    ),
     ("rsa", "AAAAB3NzaC1yc2EAAAADAQAB", 28),
     ("ed25519", "AAAAC3NzaC1lZDI1NTE5AAAA", 24),
     ("dss", "AAAAB3NzaC1kc3M", 15),
@@ -196,7 +243,13 @@ fn parse_ssh_key(text: &str) -> PResult {
             let chars: Vec<char> = payload.chars().collect();
             let prefix: String = chars[..prefix_length].iter().collect();
             let body: String = chars[prefix_length..].iter().collect();
-            return Ok(Some(Parsed::new(&format!("SSH {short_name}"), BASE64, Some(prefix), body, None)));
+            return Ok(Some(Parsed::new(
+                &format!("SSH {short_name}"),
+                BASE64,
+                Some(prefix),
+                body,
+                None,
+            )));
         }
     }
     if let Some((p, rest)) = ssh_key_regex(&payload) {
@@ -217,7 +270,11 @@ fn ssh_key_regex(text: &str) -> Option<(String, String)> {
     // body = [0-9A-Za-z+/]+ then up to 3 '='
     let body_end = rest.find('=').unwrap_or(rest.len());
     let (body, pad) = rest.split_at(body_end);
-    if body.is_empty() || !body.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/') {
+    if body.is_empty()
+        || !body
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/')
+    {
         return None;
     }
     if pad.len() > 3 || !pad.chars().all(|c| c == '=') {
@@ -231,7 +288,11 @@ fn ssh_line_split(text: &str) -> Option<(String, Option<String>)> {
     let mut s = text;
     // Strip an optional leading recognized type token.
     let type_prefixes = [
-        "ssh-ed25519", "ssh-rsa", "ssh-dss", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384",
+        "ssh-ed25519",
+        "ssh-rsa",
+        "ssh-dss",
+        "ecdsa-sha2-nistp256",
+        "ecdsa-sha2-nistp384",
         "ecdsa-sha2-nistp521",
     ];
     for tp in type_prefixes {
@@ -310,14 +371,25 @@ fn parse_bitcoin_address(text: &str) -> PResult {
     // SegWit: ^(bc1|tb1) bech32{39,69}$ (case-insensitive)
     if let Some(m) = match_prefix_bech32(text, &["bc1", "tb1"], 39, 69) {
         let (prefix, body) = m;
-        return Ok(Some(Parsed::new("BTC SegWit", BECH32, Some(prefix.to_lowercase()), body.to_lowercase(), None)));
+        return Ok(Some(Parsed::new(
+            "BTC SegWit",
+            BECH32,
+            Some(prefix.to_lowercase()),
+            body.to_lowercase(),
+            None,
+        )));
     }
     Ok(None)
 }
 
 // Match <one of prefixes><bech32 body of length in [lo,hi]>$ (case-insensitive
 // on prefix and body). Returns (prefix_as_matched, body_as_matched).
-fn match_prefix_bech32(text: &str, prefixes: &[&str], lo: usize, hi: usize) -> Option<(String, String)> {
+fn match_prefix_bech32(
+    text: &str,
+    prefixes: &[&str],
+    lo: usize,
+    hi: usize,
+) -> Option<(String, String)> {
     let low = text.to_lowercase();
     for p in prefixes {
         if low.starts_with(p) {
@@ -336,7 +408,13 @@ fn parse_ripple_address(text: &str) -> PResult {
     // ^r base58{33}$
     if let Some(rest) = text.strip_prefix('r') {
         if rest.chars().count() == 33 && is_base58(rest) {
-            return Ok(Some(Parsed::new("XRP", BASE58, Some("r".to_string()), rest.to_string(), None)));
+            return Ok(Some(Parsed::new(
+                "XRP",
+                BASE58,
+                Some("r".to_string()),
+                rest.to_string(),
+                None,
+            )));
         }
     }
     Ok(None)
@@ -344,11 +422,12 @@ fn parse_ripple_address(text: &str) -> PResult {
 
 fn parse_ethereum_address(text: &str) -> PResult {
     // ^(0x)?[0-9a-f]{40}$ case-insensitive
-    let (has_prefix, body) = if let Some(b) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
-        (true, b)
-    } else {
-        (false, text)
-    };
+    let (has_prefix, body) =
+        if let Some(b) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+            (true, b)
+        } else {
+            (false, text)
+        };
     if body.chars().count() != 40 || !is_hex(body) {
         return Ok(None);
     }
@@ -365,7 +444,13 @@ fn parse_ethereum_address(text: &str) -> PResult {
     } else if is_mixed {
         validate_eip55(body)?;
     }
-    Ok(Some(Parsed::new("ETH", HEX, Some("0x".to_string()), body.to_lowercase(), None)))
+    Ok(Some(Parsed::new(
+        "ETH",
+        HEX,
+        Some("0x".to_string()),
+        body.to_lowercase(),
+        None,
+    )))
 }
 
 fn validate_eip55(body: &str) -> Result<(), ParseError> {
@@ -377,7 +462,11 @@ fn validate_eip55(body: &str) -> Result<(), ParseError> {
             continue;
         }
         let canonical_upper = dh[i].to_digit(16).unwrap() >= 8;
-        let expected = if canonical_upper { c.to_ascii_uppercase() } else { c.to_ascii_lowercase() };
+        let expected = if canonical_upper {
+            c.to_ascii_uppercase()
+        } else {
+            c.to_ascii_lowercase()
+        };
         if c != expected {
             return Err(ParseError::Eip55 { position: i });
         }
@@ -390,13 +479,25 @@ fn parse_litecoin_address(text: &str) -> PResult {
     for prefix in ["tL", "L"] {
         if let Some(rest) = text.strip_prefix(prefix) {
             if rest.chars().count() == 33 && is_base58(rest) {
-                return Ok(Some(Parsed::new("LTC legacy", BASE58, Some(prefix.to_string()), rest.to_string(), None)));
+                return Ok(Some(Parsed::new(
+                    "LTC legacy",
+                    BASE58,
+                    Some(prefix.to_string()),
+                    rest.to_string(),
+                    None,
+                )));
             }
         }
     }
     // ltc1 bech32{38,68}
     if let Some((prefix, body)) = match_prefix_bech32(text, &["ltc1"], 38, 68) {
-        return Ok(Some(Parsed::new("LTC", BECH32, Some(prefix.to_lowercase()), body.to_lowercase(), None)));
+        return Ok(Some(Parsed::new(
+            "LTC",
+            BECH32,
+            Some(prefix.to_lowercase()),
+            body.to_lowercase(),
+            None,
+        )));
     }
     Ok(None)
 }
@@ -415,7 +516,8 @@ fn parse_bitcoin_cash_address(text: &str) -> PResult {
     };
     let rchars: Vec<char> = rest.chars().collect();
     if let Some(first) = rchars.first() {
-        if (*first == 'p' || *first == 'q' || *first == 'P' || *first == 'Q') && rchars.len() == 42 {
+        if (*first == 'p' || *first == 'q' || *first == 'P' || *first == 'Q') && rchars.len() == 42
+        {
             let body: String = rchars[1..].iter().collect();
             if is_bech32_either(&body) {
                 let full_body: String = rest.to_lowercase();
@@ -438,13 +540,25 @@ fn parse_stellar_address(text: &str) -> PResult {
         if (*first == 'G' || *first == 'g') && chars.len() == 56 {
             let body: String = chars[1..].iter().collect();
             if is_base32_either(&body) {
-                return Ok(Some(Parsed::new("XLM", BASE32, Some("G".to_string()), body.to_uppercase(), None)));
+                return Ok(Some(Parsed::new(
+                    "XLM",
+                    BASE32,
+                    Some("G".to_string()),
+                    body.to_uppercase(),
+                    None,
+                )));
             }
         }
         if (*first == 'M' || *first == 'm') && chars.len() == 69 {
             let body: String = chars[1..].iter().collect();
             if is_base32_either(&body) {
-                return Ok(Some(Parsed::new("XLM muxed", BASE32, Some("M".to_string()), body.to_uppercase(), None)));
+                return Ok(Some(Parsed::new(
+                    "XLM muxed",
+                    BASE32,
+                    Some("M".to_string()),
+                    body.to_uppercase(),
+                    None,
+                )));
             }
         }
     }
@@ -489,7 +603,13 @@ fn parse_uuid(text: &str) -> PResult {
     if pos != sc.len() {
         return Ok(None);
     }
-    Ok(Some(Parsed::new("UUID", HEX, None, stripped.to_lowercase(), None)))
+    Ok(Some(Parsed::new(
+        "UUID",
+        HEX,
+        None,
+        stripped.to_lowercase(),
+        None,
+    )))
 }
 
 fn parse_ulid(text: &str) -> PResult {
@@ -516,7 +636,13 @@ fn parse_ulid(text: &str) -> PResult {
         })
         .collect::<String>()
         .to_uppercase();
-    Ok(Some(Parsed::new("ULID", CROCKFORD32, None, normalized, None)))
+    Ok(Some(Parsed::new(
+        "ULID",
+        CROCKFORD32,
+        None,
+        normalized,
+        None,
+    )))
 }
 
 fn parse_snowflake(text: &str) -> PResult {
@@ -531,7 +657,13 @@ fn parse_snowflake(text: &str) -> PResult {
     if val >> 63 != 0 {
         return Ok(None);
     }
-    Ok(Some(Parsed::new("snowflake", DECIMAL, None, text.to_string(), None)))
+    Ok(Some(Parsed::new(
+        "snowflake",
+        DECIMAL,
+        None,
+        text.to_string(),
+        None,
+    )))
 }
 
 fn parse_lei(text: &str) -> PResult {
@@ -546,7 +678,13 @@ fn parse_lei(text: &str) -> PResult {
     if !lei_checksum_ok(&upper) {
         return Ok(None);
     }
-    Ok(Some(Parsed::new("LEI", BASE36, None, upper[..18].to_string(), Some(upper[18..].to_string()))))
+    Ok(Some(Parsed::new(
+        "LEI",
+        BASE36,
+        None,
+        upper[..18].to_string(),
+        Some(upper[18..].to_string()),
+    )))
 }
 
 fn lei_checksum_ok(lei: &str) -> bool {
@@ -584,7 +722,14 @@ fn parse_swhid(text: &str) -> PResult {
             if hexpart.chars().count() == 40 && is_hex(hexpart) {
                 let prefix: String = text.chars().take(pre.len()).collect();
                 return Ok(Some(
-                    Parsed::new("", HEX, Some(prefix.to_lowercase()), hexpart.to_string(), None).semantic(),
+                    Parsed::new(
+                        "",
+                        HEX,
+                        Some(prefix.to_lowercase()),
+                        hexpart.to_string(),
+                        None,
+                    )
+                    .semantic(),
                 ));
             }
         }
@@ -617,7 +762,9 @@ fn parse_gitoid(text: &str) -> PResult {
         return Ok(None);
     }
     let prefix = format!("gitoid:{obj}:{algo}:");
-    Ok(Some(Parsed::new("", HEX, Some(prefix), body.to_string(), None).semantic()))
+    Ok(Some(
+        Parsed::new("", HEX, Some(prefix), body.to_string(), None).semantic(),
+    ))
 }
 
 // ---- bech32 checksum (generic Cosmos-style) ----
@@ -670,7 +817,7 @@ fn parse_bech32_address(text: &str) -> PResult {
     }
     // greedy hrp => prefer the LARGEST separator index that satisfies constraints
     for &sep in sep_candidates.iter().rev() {
-        if sep < 1 || sep > 83 {
+        if !(1..=83).contains(&sep) {
             continue;
         }
         let hrp: String = chars[..sep].iter().collect();
@@ -705,7 +852,13 @@ fn parse_ipfs_cid(text: &str) -> PResult {
     // CIDv0: ^Qm base58{44}$
     if let Some(rest) = text.strip_prefix("Qm") {
         if rest.chars().count() == 44 && is_base58(rest) {
-            return Ok(Some(Parsed::new("CIDv0", BASE58, Some("Qm".to_string()), rest.to_string(), None)));
+            return Ok(Some(Parsed::new(
+                "CIDv0",
+                BASE58,
+                Some("Qm".to_string()),
+                rest.to_string(),
+                None,
+            )));
         }
     }
     // CIDv1: ^b base32{58,112}$ (either case)
@@ -720,7 +873,13 @@ fn parse_ipfs_cid(text: &str) -> PResult {
                     label.push_str(&hash);
                 }
             }
-            return Ok(Some(Parsed::new(&label, BASE32, Some("b".to_string()), rest.to_uppercase(), None)));
+            return Ok(Some(Parsed::new(
+                &label,
+                BASE32,
+                Some("b".to_string()),
+                rest.to_uppercase(),
+                None,
+            )));
         }
     }
     Ok(None)
@@ -813,11 +972,17 @@ fn parse_hex(text: &str) -> PResult {
     if (text.starts_with("0x") || text.starts_with("0X")) && text.chars().count() > 2 {
         prefix = Some("0x".to_string());
         body = &text[2..];
-    } else if text.chars().count() % 2 != 0 {
+    } else if !text.chars().count().is_multiple_of(2) {
         return Ok(None);
     }
     if is_hex(body) {
-        return Ok(Some(Parsed::new("hex", HEX, prefix, body.to_lowercase(), None)));
+        return Ok(Some(Parsed::new(
+            "hex",
+            HEX,
+            prefix,
+            body.to_lowercase(),
+            None,
+        )));
     }
     Ok(None)
 }
@@ -831,18 +996,26 @@ fn parse_eos_address(text: &str) -> PResult {
     if text.chars().all(|c| "0123456789abcdef".contains(c)) {
         return Ok(None);
     }
-    Ok(Some(Parsed::new("EOS", BASE64, None, text.to_string(), None)))
+    Ok(Some(Parsed::new(
+        "EOS",
+        BASE64,
+        None,
+        text.to_string(),
+        None,
+    )))
 }
 
 fn eos_regex(text: &str) -> bool {
     let chars: Vec<char> = text.chars().collect();
-    let in_set = |c: char| c.is_ascii_lowercase() && ('a'..='z').contains(&c) || ('1'..='5').contains(&c) || c == '.';
+    let in_set = |c: char| {
+        c.is_ascii_lowercase() && c.is_ascii_lowercase() || ('1'..='5').contains(&c) || c == '.'
+    };
     let body_ok = |s: &[char]| s.iter().all(|&c| in_set(c));
     let n = chars.len();
     // form 1: {1,11}[a-z1-5] => total 2..12, last char in a-z1-5
     if (2..=12).contains(&n) {
         let last = chars[n - 1];
-        if body_ok(&chars[..n - 1]) && ((('a'..='z').contains(&last)) || ('1'..='5').contains(&last)) {
+        if body_ok(&chars[..n - 1]) && (last.is_ascii_lowercase() || ('1'..='5').contains(&last)) {
             return true;
         }
     }
@@ -922,8 +1095,16 @@ fn detect_alphabet_by_disproof(text: &str) -> Option<Alphabet> {
         (BASE32, "abcdefghijklmnopqrstuvwxyz234567", false),
         (BECH32, BECH32_CHARS, false),
         (BASE58, BASE58_CHARS, true),
-        (BASE64, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", true),
-        (BASE64URL, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_", true),
+        (
+            BASE64,
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
+            true,
+        ),
+        (
+            BASE64URL,
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_",
+            true,
+        ),
     ];
     for (alpha, charset, case_sensitive) in order {
         let view = if case_sensitive { text } else { lower.as_str() };
@@ -964,7 +1145,7 @@ pub fn crockford5(value: u32) -> String {
 pub fn tokenize_entropy(core: &str, alphabet: &Alphabet) -> (Vec<Token>, bool) {
     let token_len = (24 / alphabet.bits_per_char) as usize;
     let n_bytes = core_byte_length(core, alphabet);
-    let token_count = (core.chars().count() + token_len - 1) / token_len; // ceil
+    let token_count = core.chars().count().div_ceil(token_len); // ceil
     if token_count <= MAX_TOKENS && n_bytes <= 64 {
         return (tokenize(core, alphabet), false);
     }
@@ -983,7 +1164,11 @@ pub fn tokenize_entropy(core: &str, alphabet: &Alphabet) -> (Vec<Token>, bool) {
         let quant = ((second[3 * i] as u32) << 16)
             | ((second[3 * i + 1] as u32) << 8)
             | (second[3 * i + 2] as u32);
-        middle.push(Token { text: crockford5(quant), index: i, quant });
+        middle.push(Token {
+            text: crockford5(quant),
+            index: i,
+            quant,
+        });
     }
 
     let mut combined: Vec<Token> = Vec::with_capacity(20);
@@ -993,7 +1178,11 @@ pub fn tokenize_entropy(core: &str, alphabet: &Alphabet) -> (Vec<Token>, bool) {
     let renumbered: Vec<Token> = combined
         .into_iter()
         .enumerate()
-        .map(|(i, t)| Token { text: t.text, index: i, quant: t.quant })
+        .map(|(i, t)| Token {
+            text: t.text,
+            index: i,
+            quant: t.quant,
+        })
         .collect();
     (renumbered, true)
 }
@@ -1016,7 +1205,9 @@ mod tests {
 
     #[test]
     fn uuid_dashed_equals_undashed_core() {
-        let a = parse("550e8400-e29b-41d4-a716-446655440000").unwrap().unwrap();
+        let a = parse("550e8400-e29b-41d4-a716-446655440000")
+            .unwrap()
+            .unwrap();
         let b = parse("550e8400e29b41d4a716446655440000").unwrap().unwrap();
         assert_eq!(a.core, b.core);
         assert_eq!(a.core, "550e8400e29b41d4a716446655440000");
@@ -1024,20 +1215,39 @@ mod tests {
 
     #[test]
     fn eth_eip55_good_and_bad() {
-        assert_eq!(parse("0x742d35cc6634c0532925a3b844bc454e4438f44e").unwrap().unwrap().type_name, "ETH");
-        assert_eq!(parse("0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed").unwrap().unwrap().type_name, "ETH");
-        assert!(matches!(parse("0x5aaeb6053F3E94C9b9A09f33669435E7Ef1BeAed"), Err(ParseError::Eip55 { .. })));
+        assert_eq!(
+            parse("0x742d35cc6634c0532925a3b844bc454e4438f44e")
+                .unwrap()
+                .unwrap()
+                .type_name,
+            "ETH"
+        );
+        assert_eq!(
+            parse("0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed")
+                .unwrap()
+                .unwrap()
+                .type_name,
+            "ETH"
+        );
+        assert!(matches!(
+            parse("0x5aaeb6053F3E94C9b9A09f33669435E7Ef1BeAed"),
+            Err(ParseError::Eip55 { .. })
+        ));
     }
 
     #[test]
     fn swhid_gitoid_semantic_prefix() {
-        let s = parse("swh:1:rev:309cf2674ee7a0749978cf8265ab91a60aea0f7d").unwrap().unwrap();
+        let s = parse("swh:1:rev:309cf2674ee7a0749978cf8265ab91a60aea0f7d")
+            .unwrap()
+            .unwrap();
         assert!(s.prefix_semantic);
         assert_eq!(s.prefix.as_deref(), Some("swh:1:rev:"));
         assert_eq!(s.core, "309cf2674ee7a0749978cf8265ab91a60aea0f7d");
-        let g = parse("gitoid:blob:sha256:473a0f4c3be8a93681a267e3b1e9a7dcda1185436fe141f7749120a303721813")
-            .unwrap()
-            .unwrap();
+        let g = parse(
+            "gitoid:blob:sha256:473a0f4c3be8a93681a267e3b1e9a7dcda1185436fe141f7749120a303721813",
+        )
+        .unwrap()
+        .unwrap();
         assert!(g.prefix_semantic);
         assert_eq!(g.prefix.as_deref(), Some("gitoid:blob:sha256:"));
     }
@@ -1052,14 +1262,34 @@ mod tests {
 
     #[test]
     fn cesr_codes() {
-        assert_eq!(parse("DKxy2sgzfplyr_tgwIxS19f2OchFHtLwPWD3v4oYimBx").unwrap().unwrap().type_name, "CESR Ed25519 pubkey");
-        assert_eq!(parse("BKxy2sgzfplyr_tgwIxS19f2OchFHtLwPWD3v4oYimBx").unwrap().unwrap().type_name, "CESR Ed25519 nt pubkey");
-        assert_eq!(parse("EBfdlu8R27Fbx_ehrqwImnK_8Cm79sqbAQ4caaZG_LFv").unwrap().unwrap().type_name, "CESR Blake3-256");
+        assert_eq!(
+            parse("DKxy2sgzfplyr_tgwIxS19f2OchFHtLwPWD3v4oYimBx")
+                .unwrap()
+                .unwrap()
+                .type_name,
+            "CESR Ed25519 pubkey"
+        );
+        assert_eq!(
+            parse("BKxy2sgzfplyr_tgwIxS19f2OchFHtLwPWD3v4oYimBx")
+                .unwrap()
+                .unwrap()
+                .type_name,
+            "CESR Ed25519 nt pubkey"
+        );
+        assert_eq!(
+            parse("EBfdlu8R27Fbx_ehrqwImnK_8Cm79sqbAQ4caaZG_LFv")
+                .unwrap()
+                .unwrap()
+                .type_name,
+            "CESR Blake3-256"
+        );
     }
 
     #[test]
     fn bech32_cosmos_suffix() {
-        let p = parse("cosmos1qqqsyqcyq5rqwzqfpg9scrgwpugpzysnrk363e").unwrap().unwrap();
+        let p = parse("cosmos1qqqsyqcyq5rqwzqfpg9scrgwpugpzysnrk363e")
+            .unwrap()
+            .unwrap();
         assert_eq!(p.type_name, "bech32");
         assert_eq!(p.prefix.as_deref(), Some("cosmos1"));
         assert_eq!(p.suffix.as_deref(), Some("rk363e"));
@@ -1067,7 +1297,9 @@ mod tests {
 
     #[test]
     fn cid_v1_label() {
-        let p = parse("bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi").unwrap().unwrap();
+        let p = parse("bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi")
+            .unwrap()
+            .unwrap();
         assert_eq!(p.type_name, "CIDv1 dag-pb");
     }
 
@@ -1080,7 +1312,10 @@ mod tests {
 
     #[test]
     fn snowflake_decimal() {
-        assert_eq!(parse("80351110224678912").unwrap().unwrap().type_name, "snowflake");
+        assert_eq!(
+            parse("80351110224678912").unwrap().unwrap().type_name,
+            "snowflake"
+        );
     }
 
     #[test]

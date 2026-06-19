@@ -39,7 +39,10 @@ fn sanitize_note(note: Option<&str>) -> Result<Option<String>, RenderError> {
         Some("") => Ok(None),
         Some(n) => {
             if n.chars().count() > NOTE_MAX_LEN {
-                return Err(RenderError::Note(format!("note too long: {}", n.chars().count())));
+                return Err(RenderError::Note(format!(
+                    "note too long: {}",
+                    n.chars().count()
+                )));
             }
             if n.is_empty() || !n.chars().all(|c| c.is_ascii_alphanumeric()) {
                 return Err(RenderError::Note("note must be ASCII alphanumeric".into()));
@@ -51,10 +54,15 @@ fn sanitize_note(note: Option<&str>) -> Result<Option<String>, RenderError> {
 
 // ---- tiny XML helpers ----
 fn esc_attr(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 fn esc_text(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 fn n(x: f64) -> String {
     format!("{}", x)
@@ -113,11 +121,17 @@ pub fn render(
     if tokens.is_empty() {
         return Err(RenderError::NoTokens);
     }
-    let truncated_bytes: Option<usize> = if is_truncated { Some(raw_input.len()) } else { None };
+    let truncated_bytes: Option<usize> = if is_truncated {
+        Some(raw_input.len())
+    } else {
+        None
+    };
     let token_count = tokens.len();
 
-    let fingerprint_core =
-        if prefix.is_some() && prefix_semantic { format!("{}{}", prefix.as_ref().unwrap(), core) } else { core.clone() };
+    let fingerprint_core = match (&prefix, prefix_semantic) {
+        (Some(p), true) => format!("{p}{core}"),
+        _ => core.clone(),
+    };
 
     let primary = compute_fingerprint(&fingerprint_core);
     let ftoks_all = tokenize_fingerprint(&primary);
@@ -157,8 +171,11 @@ pub fn render(
     let used_cells: std::collections::HashSet<usize> = cell_indices.iter().copied().collect();
 
     // --- per-cell text sizes ---
-    let cell_text_pt =
-        if alphabet.bits_per_char == 4 { (font_size_pt * 0.75).round_ties_even() } else { font_size_pt };
+    let cell_text_pt = if alphabet.bits_per_char == 4 {
+        (font_size_pt * 0.75).round_ties_even()
+    } else {
+        font_size_pt
+    };
     let cell_text_px = cell_text_pt * DPI / 72.0;
     let label_text_px = (font_size_pt * 0.75).round_ties_even() * DPI / 72.0;
     let fp_middle_text_px = (font_size_pt * 0.80).round_ties_even() * DPI / 72.0;
@@ -260,7 +277,16 @@ pub fn render(
 
     // Layer 2: ellipse overlay (appended inside grid channel)
     draw_ellipse_overlay(
-        &mut s, &primary, &grid, grid_left, grid_top, grid_w, grid_h, cell_w, cell_h, &style.bg_color,
+        &mut s,
+        &primary,
+        &grid,
+        grid_left,
+        grid_top,
+        grid_w,
+        grid_h,
+        cell_w,
+        cell_h,
+        &style.bg_color,
         &clip_id,
     );
 
@@ -281,11 +307,18 @@ pub fn render(
     let max_cell_idx = max_cell.1;
 
     // --- blanks + fills ---
-    let blank_indices: Vec<usize> = (0..cell_count).filter(|ci| !used_cells.contains(ci)).collect();
+    let blank_indices: Vec<usize> = (0..cell_count)
+        .filter(|ci| !used_cells.contains(ci))
+        .collect();
     let map_cell_idx = blank_indices.iter().copied().min();
     let sole_blank = blank_indices.len() == 1;
-    let map_fill = if style.bg_color == "#ffffff" { "#e7be00" } else { "#ffffff" };
-    let mut blank_fill_color: std::collections::HashMap<usize, String> = std::collections::HashMap::new();
+    let map_fill = if style.bg_color == "#ffffff" {
+        "#e7be00"
+    } else {
+        "#ffffff"
+    };
+    let mut blank_fill_color: std::collections::HashMap<usize, String> =
+        std::collections::HashMap::new();
     let mut j = 0usize;
     for &bi in &blank_indices {
         if Some(bi) != map_cell_idx || sole_blank {
@@ -319,7 +352,11 @@ pub fn render(
 
     // Layer 3+: per-cell groups in cell-index order
     s.push_str("<g>");
-    let fp_border = if style.bg_color == "#ffffff" { "#e7be00" } else { "#ffffff" };
+    let fp_border = if style.bg_color == "#ffffff" {
+        "#e7be00"
+    } else {
+        "#ffffff"
+    };
     let corner_radius = nucleus_h / 2.0;
     for ci in 0..cell_count {
         let col = ci % grid.cols;
@@ -407,8 +444,7 @@ pub fn render(
             }
         } else {
             // filled cell: nucleus rect, optional border, text
-            let (token, _ftok, _ci, nucleus_bg) =
-                token_cells.iter().find(|tc| tc.2 == ci).unwrap();
+            let (token, _ftok, _ci, nucleus_bg) = token_cells.iter().find(|tc| tc.2 == ci).unwrap();
             let is_fp_middle = is_truncated && (8..=11).contains(&token.index);
             let (bg_color, fg_color) = {
                 let r = u32::from_str_radix(&nucleus_bg[1..3], 16).unwrap();
@@ -436,7 +472,11 @@ pub fn render(
                     esc_attr(fp_border)
                 ));
             }
-            let text_px = if is_fp_middle { fp_middle_text_px } else { cell_text_px };
+            let text_px = if is_fp_middle {
+                fp_middle_text_px
+            } else {
+                cell_text_px
+            };
             let cx = nx + nucleus_w / 2.0;
             let cy = ny + nucleus_h / 2.0;
             s.push_str(&format!(
@@ -451,7 +491,11 @@ pub fn render(
             // quartile mark
             if let Some((q_idx, fg)) = quartile_of_cell.get(&ci) {
                 let poly = quartile_polygon(*q_idx, nx, ny, nucleus_w, nucleus_h);
-                s.push_str(&format!("<polygon points=\"{}\" fill=\"{}\"/>", poly, esc_attr(fg)));
+                s.push_str(&format!(
+                    "<polygon points=\"{}\" fill=\"{}\"/>",
+                    poly,
+                    esc_attr(fg)
+                ));
             }
         }
         s.push_str("</g>");
@@ -460,12 +504,30 @@ pub fn render(
     s.push_str("</g>"); // grid channel
 
     // color bar
-    draw_color_bar(&mut s, &primary, &second_digest(&core), &style, bar_w, bounding_h, cell_text_px);
+    draw_color_bar(
+        &mut s,
+        &primary,
+        &second_digest(&core),
+        &style,
+        bar_w,
+        bounding_h,
+        cell_text_px,
+    );
 
     // labels
     draw_label_strips(
-        &mut s, grid_left, grid_right, grid_top, grid_bottom, nucleus_h, &type_name, &prefix, &suffix,
-        label_text_px, truncated_bytes, &note,
+        &mut s,
+        grid_left,
+        grid_right,
+        grid_top,
+        grid_bottom,
+        nucleus_h,
+        &type_name,
+        &prefix,
+        &suffix,
+        label_text_px,
+        truncated_bytes,
+        &note,
     );
 
     // borders
@@ -479,7 +541,13 @@ pub fn render(
     bl(&mut s, bounding_w - 0.5, 0.0, bounding_w - 0.5, bounding_h);
     bl(&mut s, 0.0, bounding_h - 0.5, bounding_w, bounding_h - 0.5);
     bl(&mut s, 0.5, 0.0, 0.5, bounding_h);
-    bl(&mut s, 1.0 + bar_w + 0.5, 0.0, 1.0 + bar_w + 0.5, bounding_h);
+    bl(
+        &mut s,
+        1.0 + bar_w + 0.5,
+        0.0,
+        1.0 + bar_w + 0.5,
+        bounding_h,
+    );
 
     s.push_str("</svg>");
     Ok(s)
@@ -501,7 +569,14 @@ fn box_origin(i: u32, cell_left: f64, cell_top: f64, bw: f64, bh: f64) -> (f64, 
     }
 }
 
-fn sub_center(cell_idx: usize, nx: f64, ny: f64, grid: &Grid, sub_w: f64, sub_h: f64) -> (f64, f64) {
+fn sub_center(
+    cell_idx: usize,
+    nx: f64,
+    ny: f64,
+    grid: &Grid,
+    sub_w: f64,
+    sub_h: f64,
+) -> (f64, f64) {
     (
         nx + (cell_idx % grid.cols) as f64 * sub_w + 0.5 * sub_w,
         ny + (cell_idx / grid.cols) as f64 * sub_h + 0.5 * sub_h,
@@ -514,10 +589,17 @@ fn quartile_polygon(q_idx: usize, nx: f64, ny: f64, w: f64, h: f64) -> String {
     let pts: [(f64, f64); 3] = match q_idx {
         0 => [(left, top), (left + leg, top), (left, top + leg)],
         1 => [(right, top), (right - leg, top), (right, top + leg)],
-        2 => [(right, bottom), (right, bottom - leg), (right - leg, bottom)],
+        2 => [
+            (right, bottom),
+            (right, bottom - leg),
+            (right - leg, bottom),
+        ],
         _ => [(left, bottom), (left, bottom - leg), (left + leg, bottom)],
     };
-    pts.iter().map(|p| format!("{},{}", n(p.0), n(p.1))).collect::<Vec<_>>().join(" ")
+    pts.iter()
+        .map(|p| format!("{},{}", n(p.0), n(p.1)))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn assign_cell_indices(
@@ -584,10 +666,16 @@ fn draw_ellipse_overlay(
         }
         for r in 1..grid.rows {
             p.push((grid_left, grid_top + r as f64 * cell_h));
-            p.push((grid_left + grid.cols as f64 * cell_w, grid_top + r as f64 * cell_h));
+            p.push((
+                grid_left + grid.cols as f64 * cell_w,
+                grid_top + r as f64 * cell_h,
+            ));
         }
         for c in 0..=grid.cols {
-            p.push((grid_left + c as f64 * cell_w, grid_top + grid.rows as f64 * cell_h));
+            p.push((
+                grid_left + c as f64 * cell_w,
+                grid_top + grid.rows as f64 * cell_h,
+            ));
         }
         p
     };
@@ -706,18 +794,29 @@ fn draw_color_bar(
     let edge = &style.edge_colors;
     // first-appearance order of patterns -> colors
     let order = first_appearance(digest);
-    let order_pos: std::collections::HashMap<&str, usize> =
-        order.iter().enumerate().map(|(i, &p)| (edge[p].as_str(), i)).collect();
-    let color_order: std::collections::HashMap<&str, usize> =
-        edge.iter().enumerate().map(|(i, c)| (c.as_str(), i)).collect();
+    let order_pos: std::collections::HashMap<&str, usize> = order
+        .iter()
+        .enumerate()
+        .map(|(i, &p)| (edge[p].as_str(), i))
+        .collect();
+    let color_order: std::collections::HashMap<&str, usize> = edge
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.as_str(), i))
+        .collect();
 
-    let mut used: Vec<(String, usize)> =
-        (0..4).filter(|&i| counts[i] > 0).map(|i| (edge[i].clone(), counts[i])).collect();
+    let mut used: Vec<(String, usize)> = (0..4)
+        .filter(|&i| counts[i] > 0)
+        .map(|i| (edge[i].clone(), counts[i]))
+        .collect();
     if used.is_empty() {
         return;
     }
     used.sort_by_key(|(c, _)| {
-        (*order_pos.get(c.as_str()).unwrap_or(&4), *color_order.get(c.as_str()).unwrap_or(&4))
+        (
+            *order_pos.get(c.as_str()).unwrap_or(&4),
+            *color_order.get(c.as_str()).unwrap_or(&4),
+        )
     });
     let total: f64 = used.iter().map(|(_, nn)| (*nn as f64).powi(4)).sum();
 
@@ -733,7 +832,10 @@ fn draw_color_bar(
         };
         let letter = band_letter(color);
         let band_attrs = match letter {
-            Some(l) => format!(" data-color-bar-rank=\"{}\" data-color-bar-band=\"{}\"", i, l),
+            Some(l) => format!(
+                " data-color-bar-rank=\"{}\" data-color-bar-band=\"{}\"",
+                i, l
+            ),
             None => format!(" data-color-bar-rank=\"{}\"", i),
         };
         s.push_str(&format!("<g{}>", band_attrs));
@@ -823,7 +925,11 @@ fn draw_label_strips(
     truncated_bytes: Option<usize>,
     note: &Option<String>,
 ) {
-    let style_attr = format!("font-family: {}; font-size: {}px;", MONOSPACE_FONT_FAMILY, n(text_px));
+    let style_attr = format!(
+        "font-family: {}; font-size: {}px;",
+        MONOSPACE_FONT_FAMILY,
+        n(text_px)
+    );
     let rest_text = if !type_name.is_empty() {
         let mut t = format!("{}:", type_name);
         if let Some(p) = prefix {
@@ -918,7 +1024,12 @@ mod tests {
     #[test]
     fn rejects_bad_eip55() {
         assert!(matches!(
-            render("0x5aaeb6053F3E94C9b9A09f33669435E7Ef1BeAed", 1.0, 12.0, None),
+            render(
+                "0x5aaeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
+                1.0,
+                12.0,
+                None
+            ),
             Err(RenderError::Eip55)
         ));
     }

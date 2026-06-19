@@ -71,14 +71,22 @@ fn build_large_tokens(core: &str, alphabet: &Alphabet, token_len: usize) -> Vec<
         let quant = ((second[3 * i] as u32) << 16)
             | ((second[3 * i + 1] as u32) << 8)
             | (second[3 * i + 2] as u32);
-        combined.push(Token { text: crockford5(quant), index: i, quant });
+        combined.push(Token {
+            text: crockford5(quant),
+            index: i,
+            quant,
+        });
     }
     combined.extend(tail_tokens);
     // Renumber 0..19 (head 0..7, middle 8..11, tail 12..19).
     combined
         .into_iter()
         .enumerate()
-        .map(|(i, t)| Token { text: t.text, index: i, quant: t.quant })
+        .map(|(i, t)| Token {
+            text: t.text,
+            index: i,
+            quant: t.quant,
+        })
         .collect()
 }
 
@@ -276,9 +284,9 @@ pub enum ModelError {
 fn core_byte_length(core: &str, alphabet: &Alphabet) -> usize {
     let n = core.chars().count();
     match alphabet.bits_per_char {
-        4 => n / 2,                  // hex
-        5 => n * 5 / 8,              // base32 / bech32 / crockford32
-        6 => n * 6 / 8,              // base64 / base64url / base58 / base36 (approx)
+        4 => n / 2,     // hex
+        5 => n * 5 / 8, // base32 / bech32 / crockford32
+        6 => n * 6 / 8, // base64 / base64url / base58 / base36 (approx)
         _ => n,
     }
 }
@@ -391,7 +399,15 @@ pub fn compute_render_model(
     bottom_strip: bool,
     raw_bytes: usize,
 ) -> Result<RenderModel, ModelError> {
-    compute_render_model_fp(core, core, alphabet, target_ar, font_pt, bottom_strip, raw_bytes)
+    compute_render_model_fp(
+        core,
+        core,
+        alphabet,
+        target_ar,
+        font_pt,
+        bottom_strip,
+        raw_bytes,
+    )
 }
 
 /// Like [`compute_render_model`] but with a distinct `fingerprint_core` — the
@@ -414,9 +430,9 @@ pub fn compute_render_model_fp(
         return Err(ModelError::Empty);
     }
     let token_len = (24 / alphabet.bits_per_char) as usize;
-    let est_token_count = (core.chars().count() + token_len - 1) / token_len; // ceil
-    // v6 large-input trigger: >512 bits (>64 bytes) OR >22 tokens. The large
-    // path renders 8 head + 4 fingerprint-middle + 8 tail tokens (20 total).
+    let est_token_count = core.chars().count().div_ceil(token_len); // ceil
+                                                                    // v6 large-input trigger: >512 bits (>64 bytes) OR >22 tokens. The large
+                                                                    // path renders 8 head + 4 fingerprint-middle + 8 tail tokens (20 total).
     let is_truncated = est_token_count > 22 || core_byte_length(core, alphabet) > 64;
 
     let tokens = if is_truncated {
@@ -493,7 +509,8 @@ pub fn compute_render_model_fp(
     let max_cell_idx = max_cell.1;
 
     // --- quartile mark per cell (q_idx 0..3 -> corner 1..4) ---
-    let mut quartile_of_cell: std::collections::HashMap<usize, u8> = std::collections::HashMap::new();
+    let mut quartile_of_cell: std::collections::HashMap<usize, u8> =
+        std::collections::HashMap::new();
     for (q_idx, qt) in quartiles.iter().enumerate() {
         if let Some(qt) = qt {
             let ci = cell_of_token[qt.index];
@@ -504,11 +521,14 @@ pub fn compute_render_model_fp(
     // --- assemble cells ---
     let cell_count = grid.cols * grid.rows;
     let used_cells: std::collections::HashSet<usize> = cell_of_token.iter().copied().collect();
-    let blank_indices: Vec<usize> = (0..cell_count).filter(|ci| !used_cells.contains(ci)).collect();
+    let blank_indices: Vec<usize> = (0..cell_count)
+        .filter(|ci| !used_cells.contains(ci))
+        .collect();
     let map_cell = blank_indices.iter().copied().min();
 
     // token_index for each cell index (reverse of cell_of_token)
-    let mut token_of_cell: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    let mut token_of_cell: std::collections::HashMap<usize, usize> =
+        std::collections::HashMap::new();
     for (t_idx, &ci) in cell_of_token.iter().enumerate() {
         token_of_cell.insert(ci, t_idx);
     }
@@ -534,7 +554,11 @@ pub fn compute_render_model_fp(
     // the white/gold anchor. Filled blanks are enumerated in cell-index order;
     // the j-th takes edge_palette[primary[32 + j] & 0b11]. See pipeline.py v10.
     let sole_blank = blank_indices.len() == 1;
-    let anchor_idx = if style.bg_color == "#ffffff" { 1u8 } else { 0u8 }; // gold on white else white
+    let anchor_idx = if style.bg_color == "#ffffff" {
+        1u8
+    } else {
+        0u8
+    }; // gold on white else white
     let mut blank_fill_of_cell: std::collections::HashMap<usize, u8> =
         std::collections::HashMap::new();
     let mut filled_j = 0usize;
@@ -687,7 +711,12 @@ pub fn compute_render_model_fp(
             let rx = r_min + ((primary[61] % 16) as f64 / 15.0) * (r_max - r_min);
             let ry = r_min + ((primary[62] % 16) as f64 / 15.0) * (r_max - r_min);
             let rotation = ((primary[63] % 16) as f64 / 15.0) * 180.0;
-            Some(Ellipse { anchor, rx, ry, rotation })
+            Some(Ellipse {
+                anchor,
+                rx,
+                ry,
+                rotation,
+            })
         }
     };
 
@@ -776,7 +805,7 @@ pub fn channels(
     bottom_strip: bool,
 ) -> Channels {
     let token_len = (24 / alphabet.bits_per_char) as usize;
-    let est_token_count = (core.chars().count() + token_len - 1) / token_len;
+    let est_token_count = core.chars().count().div_ceil(token_len);
     let is_truncated = est_token_count > 22 || core_byte_length(core, alphabet) > 64;
     // Short: token_count == ceil(len/token_len). Large: always 20 (8+4+8). We
     // never need the cell text here, only the count (for ftoks + grid).
@@ -872,7 +901,13 @@ pub fn color_field(
     bottom_strip: bool,
 ) -> ColorField {
     let m = compute_render_model_fp(
-        core, fingerprint_core, alphabet, target_ar, font_pt, bottom_strip, 0,
+        core,
+        fingerprint_core,
+        alphabet,
+        target_ar,
+        font_pt,
+        bottom_strip,
+        0,
     )
     .expect("non-empty core");
     let bg = palette_idx(&m.bg_color);
@@ -887,7 +922,11 @@ pub fn color_field(
             fp_edge.push((c.index, palette_idx(c.edge_color.as_deref().unwrap_or(""))));
         }
     }
-    ColorField { bg, fp_edge, blank_fill }
+    ColorField {
+        bg,
+        fp_edge,
+        blank_fill,
+    }
 }
 
 /// The per-cell FRAME color, in cell-index order (cell 0 = top-left, the first-
@@ -906,7 +945,13 @@ pub fn frame_colors(
     bottom_strip: bool,
 ) -> Vec<u8> {
     let m = compute_render_model_fp(
-        core, fingerprint_core, alphabet, target_ar, font_pt, bottom_strip, 0,
+        core,
+        fingerprint_core,
+        alphabet,
+        target_ar,
+        font_pt,
+        bottom_strip,
+        0,
     )
     .expect("non-empty core");
     m.cells
@@ -1016,7 +1061,10 @@ mod tests {
         assert_eq!(cf.blank_fill.len(), 1);
         assert_eq!(cf.blank_fill[0].0, 7);
         let fill = cf.blank_fill[0].1;
-        assert!(fill < 5 && fill != 3, "blank fill idx {fill} must be a non-blue palette color");
+        assert!(
+            fill < 5 && fill != 3,
+            "blank fill idx {fill} must be a non-blue palette color"
+        );
         // Consistency: fp_edge colors equal the model's edge_color on those cells.
         let m = compute_render_model(&core, &HEX, 1.0, 12.0, false, 64).unwrap();
         for &(ci, idx) in &cf.fp_edge {
@@ -1055,7 +1103,7 @@ mod tests {
         assert_eq!(ch.bg, 3); // blue
         assert_eq!((ch.marker_left, ch.marker_right, ch.marker_k), (2, 5, 15));
         assert_eq!(ch.bar_order, [1, 3, 2, 0]); // gold, black, red, white (first-appearance)
-        // Ellipse rotation: step/15·180 must equal the model's 12°.
+                                                // Ellipse rotation: step/15·180 must equal the model's 12°.
         let e = m.ellipse.unwrap();
         assert!((ch.ell_rot as f64 / 15.0 * 180.0 - e.rotation).abs() < 1e-9);
         assert_eq!(ch.ell_rot, 1);
@@ -1108,7 +1156,7 @@ mod tests {
         assert_eq!(c0.surround_bits, Some(3731819));
         assert_eq!(c0.quartile, Some(3));
         assert_eq!(c0.text_size_px, Some(16.0)); // 4-char b64url → full size
-        // No blanks on a 2×2 grid filled by 4 tokens → no map cell.
+                                                 // No blanks on a 2×2 grid filled by 4 tokens → no map cell.
         assert!(m.cells.iter().all(|c| !c.blank && !c.blank_map));
     }
 
