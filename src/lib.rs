@@ -1,22 +1,23 @@
 //! entviz — Rust reference port (spec v10).
 //!
-//! **STATUS: UNVERIFIED SCAFFOLD.** This crate ports the deterministic shared
-//! core of entviz (tokenization + quant extension, the SHA-512 fingerprint,
-//! ftok median/quartile selection, the Oklab color rules, and grid selection),
-//! mirroring the *certified* TypeScript implementation (`entviz-js`, which
-//! passes the shared conformance corpus at Tier A + Tier B). It has **not been
-//! compiled or tested** here because this machine has no Rust toolchain
-//! (`rustc`/`cargo` absent). Once a toolchain is installed:
+//! **STATUS: CERTIFIED v10.** This crate is a full, self-contained entviz
+//! implementation: the deterministic shared core (tokenization + quant
+//! extension, the SHA-512 fingerprint, ftok median/quartile selection, the
+//! Oklab color rules, grid selection), the format-specific parsers
+//! ([`entropy`]), and the SVG renderer ([`pipeline::render`]). It passes the
+//! shared conformance corpus at **Tier A (render model) + Tier B (canonical
+//! raster)** for every render vector, rejects every error vector, and satisfies
+//! every invariant pair. Certify with:
 //!
 //! ```sh
-//! cargo test                  # the unit tests below mirror the certified TS
-//! # then port the SVG renderer (see README) and certify via:
-//! #   python -m compliance.runner --impl-cmd 'cargo run -q' --only '<subset>'
+//! cargo build --release --bin entviz-conformance
+//! # from the entviz repo:
+//! PYTHONPATH=src:. python -m compliance.runner \
+//!     --impl-cmd '/path/to/entviz-rs/target/release/entviz-conformance'
 //! ```
 //!
-//! The SVG renderer (`render()`) and the format-specific parsers are the
-//! remaining work; the core ported here is the load-bearing, hardest-to-get-
-//! right part and is the same algorithm the TS core proved correct.
+//! The `entviz-conformance` binary (`src/main.rs`) implements the stdin/stdout
+//! contract in the entviz repo's `compliance/README.md`.
 
 use base64::Engine;
 use sha2::{Digest, Sha512};

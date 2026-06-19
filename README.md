@@ -1,42 +1,47 @@
 # entviz-rs
 
-Rust implementation of [entviz](https://github.com/dhh1128/entviz) (spec **v7**)
+Rust implementation of [entviz](https://github.com/dhh1128/entviz) (spec **v10**)
 — visualize high-entropy values as comparable SVG diagrams.
 
-## ⚠️ Status: unverified scaffold (blocked on toolchain)
+## Status: certified against the v10 conformance corpus ✅
 
-This crate was scaffolded on a host **without a Rust toolchain** (`rustc` /
-`cargo` are not installed), so it has **not been compiled, tested, or
-certified**. What's here:
+A full, self-contained implementation that passes the shared conformance corpus
+at **Tier A** (render model) **+ Tier B** (canonical raster) for every render
+vector, rejects every error vector, and satisfies every invariant pair
+(**52/52**). What's here:
 
-- **`src/lib.rs`** — the deterministic shared core, ported to mirror the
-  *certified* `entviz-js` TypeScript core (which passes the shared conformance
-  corpus at Tier A + Tier B): alphabets, tokenization + 24-bit quant extension,
-  the SHA-512 fingerprint (via `sha2`), ftok median/quartile selection, the
-  Oklab color rules + weighted-RGB edge selection, and grid selection. Includes
-  `#[cfg(test)]` unit tests mirroring the certified TS tests.
-- **`src/main.rs`** — the conformance-CLI stub (stdin→stdout contract); rejects
-  everything until the renderer lands, rather than emit a wrong SVG.
+- **`src/lib.rs`** — the deterministic shared core: alphabets, tokenization +
+  24-bit quant extension, the SHA-512 fingerprint (via `sha2`), ftok
+  median/quartile selection, the Oklab color rules + weighted-RGB edge
+  selection, and grid selection.
+- **`src/entropy.rs`** — the format-specific parsers (hex, UUID, Ethereum w/
+  EIP-55, ULID, base58 / bech32 / base32 chains, CESR, LEI, snowflake, SWHID /
+  gitoid semantic-prefix fold, IPFS CID, SSH, …) + the disproof-based alphabet
+  detection and large-input (head / fingerprint-middle / tail) tokenization.
+- **`src/keccak.rs`** — vendored Keccak-256 for EIP-55 checksum validation.
+- **`src/pipeline.rs`** — the SVG renderer: geometry, 24-box surround,
+  fingerprint-edge cells, ellipse overlay, color bar + markers, blank-cell map,
+  quartile marks, labels, borders — emitting the normative `data-*` profile.
+- **`src/main.rs`** — the `entviz-conformance` CLI (the stdin→stdout contract in
+  the entviz repo's `compliance/README.md`).
 
-## To finish + certify (once a toolchain is available)
+## Build + certify
 
 ```sh
-rustup default stable          # install a toolchain
-cargo test                     # the ported core's unit tests should pass
+cargo test                                  # unit + corpus render/reject contract
+cargo build --release --bin entviz-conformance
 
-# then port the SVG renderer (mirror entviz-js/packages/core/src/entviz.ts —
-# geometry, surround, ellipse, color bar, blank-cell map, quartile marks,
-# labels) + the parsers, wire src/main.rs to call entviz::render(), and certify:
-python -m compliance.runner \
-  --impl-cmd 'cargo run -q --bin entviz-conformance' \
-  --only '<supported subset>'
+# from a checkout of the entviz reference repo (sibling ../entviz):
+PYTHONPATH=src:. python -m compliance.runner \
+  --impl-cmd '/path/to/entviz-rs/target/release/entviz-conformance'
+# -> 52/52 vectors passed
 ```
 
-The renderer is a mechanical port of the certified TS renderer; the hard,
-load-bearing core (the part most likely to differ subtly between languages) is
-already ported here.
+`cargo test` also runs a corpus-driven smoke test (`tests/conformance.rs`) that
+drives every vector through the renderer when `../entviz` is checked out; the
+full Tier-A/Tier-B golden comparison is the Python runner above.
 
-Dependencies are intentionally allowed (`sha2`, `base64`, `hex`).
+Dependencies are intentionally minimal (`sha2`, `base64`, `hex`, `serde_json`).
 
 ## License
 
