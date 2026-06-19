@@ -7,6 +7,17 @@ license = "Apache-2.0"
 repository = "https://github.com/dhh1128/entviz-rs"
 keywords = ["entropy", "fingerprint", "svg", "visualization"]
 categories = ["visualization", "cryptography"]
+# Keep the published crate to code + license + readme; drop dev/agent tooling
+# (CI, release/admin scripts, and AI-assistant instruction files) that
+# downstream users don't need.
+exclude = [
+    ".github",
+    "scripts",
+    ".cursorrules",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "GEMINI.md",
+]
 
 [dependencies]
 sha2 = "0.10"        # SHA-512 fingerprint
