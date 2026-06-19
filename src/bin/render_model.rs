@@ -66,9 +66,9 @@ fn main() {
         bits_per_char: bits,
     };
 
-    // `--colorfield`: print the v10 colour-singleton field (bg + fingerprint-edge
-    // + blank-fill colours, as hex) instead of the full model, for golden-SVG
-    // validation of the blank-fill formula (the only colour channel the Tier-A
+    // `--colorfield`: print the v10 color-singleton field (bg + fingerprint-edge
+    // + blank-fill colors, as hex) instead of the full model, for golden-SVG
+    // validation of the blank-fill formula (the only color channel the Tier-A
     // oracle does not cover).
     if std::env::args().any(|a| a == "--colorfield") {
         let cf = color_field(core, fp_core, &alphabet, target_ar, font_pt, bottom_strip);

@@ -93,9 +93,9 @@ fn fg_for_bg(bg_hex: &str) -> String {
     nucleus_colors(r | (g << 8) | (b << 16)).1
 }
 
-/// Index of a palette hex colour in [`POSSIBLE_EDGE_COLORS`] (0..=4), or 255 if
-/// it is not a palette colour. Used to store the v10 colour-singleton channels
-/// (fingerprint-edge + blank-fill colours) compactly.
+/// Index of a palette hex color in [`POSSIBLE_EDGE_COLORS`] (0..=4), or 255 if
+/// it is not a palette color. Used to store the v10 color-singleton channels
+/// (fingerprint-edge + blank-fill colors) compactly.
 fn palette_idx(hex: &str) -> u8 {
     crate::POSSIBLE_EDGE_COLORS
         .iter()
@@ -135,7 +135,7 @@ pub struct CellModel {
     pub map_min: Option<(usize, usize)>, // (row, col) of minftok cell (blue dot)
     pub map_max: Option<(usize, usize)>, // (row, col) of maxftok cell (red plus)
     // v10 casual-salience channels (NOT part of the Tier-A model.json / oracle —
-    // excluded from `to_golden_json` — but load-bearing for the colour-field
+    // excluded from `to_golden_json` — but load-bearing for the color-field
     // attack persona). `fp_edge`: this filled cell is a fingerprint-edge cell
     // (its `edge_color` is fingerprint-driven, not the nucleus echo).
     // `blank_fill`: POSSIBLE_EDGE_COLORS index of this blank cell's v10 pill fill.
@@ -517,8 +517,8 @@ pub fn compute_render_model_fp(
 
     // v10 fingerprint-edge cells: the top-left cell (grid position 0, when used)
     // and the cells of the 1st & 2nd quartile ftoks take their surround edge
-    // colour from the fingerprint (2 low-order ftok-quant bits → edge palette)
-    // instead of the nearest-palette nucleus echo, so the surround colour
+    // color from the fingerprint (2 low-order ftok-quant bits → edge palette)
+    // instead of the nearest-palette nucleus echo, so the surround color
     // avalanches to a casual glance. See pipeline.py (v10 casual-avalanche).
     let mut fp_edge_cells: std::collections::HashSet<usize> = std::collections::HashSet::new();
     if used_cells.contains(&0) {
@@ -529,7 +529,7 @@ pub fn compute_render_model_fp(
     }
 
     // v10 hybrid blank fill (render-only in the Python ref; ported here for the
-    // colour-field persona). Every non-map blank is fingerprint-filled; the map
+    // color-field persona). Every non-map blank is fingerprint-filled; the map
     // blank is fingerprint-filled ONLY when it is the sole blank, else it keeps
     // the white/gold anchor. Filled blanks are enumerated in cell-index order;
     // the j-th takes edge_palette[primary[32 + j] & 0b11]. See pipeline.py v10.
@@ -568,8 +568,8 @@ pub fn compute_render_model_fp(
                 (bg, fg, text_size_px)
             };
             // v10: a fingerprint-edge cell overrides the nucleus echo with the
-            // ftok-driven palette colour; otherwise the edge is the nearest
-            // palette colour to the (possibly neutralized) nucleus bg.
+            // ftok-driven palette color; otherwise the edge is the nearest
+            // palette color to the (possibly neutralized) nucleus bg.
             let edge = if fp_edge_cells.contains(&ci) {
                 edge_palette[(used_ftoks[t_idx].quant & 0b11) as usize].to_string()
             } else {
@@ -723,8 +723,8 @@ pub fn compute_render_model_fp(
 ///
 /// NOT yet modeled here (deliberately, until a persona needs them): the per-cell
 /// nucleus/edge field and the v10 blank-cell fills. The fingerprint-edge cells'
-/// colours and the blank fills are casually salient (that is the whole point of
-/// v10), so a persona that checks "the field of cell colours" will need them
+/// colors and the blank fills are casually salient (that is the whole point of
+/// v10), so a persona that checks "the field of cell colors" will need them
 /// added — see entviz-adversarial/STATE.md.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Channels {
@@ -844,8 +844,8 @@ pub fn channels(
     }
 }
 
-/// The v10 casual-salience COLOUR singletons — the channels v10 added so a one-
-/// character change pops to a glance. The fingerprint-edge cell colours are also
+/// The v10 casual-salience COLOR singletons — the channels v10 added so a one-
+/// character change pops to a glance. The fingerprint-edge cell colors are also
 /// in the Tier-A model (hence oracle-certified via `edge_color`); the blank-cell
 /// fills are render-only there, so this is the only place they are computed (the
 /// harness cross-checks them against the golden SVGs).
@@ -859,10 +859,10 @@ pub struct ColorField {
     pub blank_fill: Vec<(usize, u8)>,
 }
 
-/// Compute the v10 colour-singleton field for a core (see [`ColorField`]). Built
+/// Compute the v10 color-singleton field for a core (see [`ColorField`]). Built
 /// from the full render model, so it carries the cell LAYOUT (positions) the
-/// gestalt [`channels`] omits — a colour-field forgery must reproduce both the
-/// colours and where they sit. Panics only on an empty core.
+/// gestalt [`channels`] omits — a color-field forgery must reproduce both the
+/// colors and where they sit. Panics only on an empty core.
 pub fn color_field(
     core: &str,
     fingerprint_core: &str,
@@ -888,6 +888,37 @@ pub fn color_field(
         }
     }
     ColorField { bg, fp_edge, blank_fill }
+}
+
+/// The per-cell FRAME color, in cell-index order (cell 0 = top-left, the first-
+/// fixation point). For a filled cell this is its surround/edge palette color —
+/// the nucleus color quantized to the palette (and fingerprint-driven on the
+/// v10 fingerprint-edge cells); for a blank cell it is the v10 pill-fill color.
+/// Values are [`POSSIBLE_EDGE_COLORS`] indices (0..=4). This is the discrete
+/// proxy for "the broad field of cell colors" a casual glance reads — the
+/// attacker-side channel for the anchored color-field persona.
+pub fn frame_colors(
+    core: &str,
+    fingerprint_core: &str,
+    alphabet: &Alphabet,
+    target_ar: f64,
+    font_pt: f64,
+    bottom_strip: bool,
+) -> Vec<u8> {
+    let m = compute_render_model_fp(
+        core, fingerprint_core, alphabet, target_ar, font_pt, bottom_strip, 0,
+    )
+    .expect("non-empty core");
+    m.cells
+        .iter()
+        .map(|c| {
+            if c.blank {
+                c.blank_fill.unwrap_or(255)
+            } else {
+                palette_idx(c.edge_color.as_deref().unwrap_or(""))
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -918,7 +949,7 @@ mod tests {
         assert_eq!(c0.nucleus_bg.as_deref(), Some("#452301"));
         assert_eq!(c0.fg.as_deref(), Some("#ffffff"));
         // v10: cell 0 is the top-left fingerprint-edge cell, so its edge is the
-        // ftok-driven palette colour (#e7be00), not the v9 nucleus echo (#000000).
+        // ftok-driven palette color (#e7be00), not the v9 nucleus echo (#000000).
         assert_eq!(c0.edge_color.as_deref(), Some("#e7be00"));
         assert_eq!(c0.surround_bits, Some(11348353));
         assert_eq!(c0.quartile, Some(2));
@@ -927,7 +958,7 @@ mod tests {
         let c1 = &m.cells[1];
         assert_eq!(c1.nucleus_bg.as_deref(), Some("#ab8967"));
         // cell 1 is the 1st-quartile fingerprint-edge cell (v10); its ftok-driven
-        // palette colour coincides with the v9 nucleus echo here.
+        // palette color coincides with the v9 nucleus echo here.
         assert_eq!(c1.edge_color.as_deref(), Some("#ff3f2f"));
         assert_eq!(c1.quartile, Some(1));
     }
@@ -974,9 +1005,9 @@ mod tests {
     #[test]
     fn color_field_hex256() {
         // hex-256, blue bg. fp-edge cells = top-left (0) + 1st/2nd quartile cells
-        // (1 and 0), so {0, 1}; their v10 edge colours are gold(#e7be00 → idx1)
+        // (1 and 0), so {0, 1}; their v10 edge colors are gold(#e7be00 → idx1)
         // on cell 0 and red(#ff3f2f → idx2) on cell 1. One blank (cell 7) which
-        // is the sole blank → fingerprint-filled; its colour is from the blue
+        // is the sole blank → fingerprint-filled; its color is from the blue
         // edge palette {white0, gold1, red2, black4} (never blue=3).
         let core = hex256_core();
         let cf = color_field(&core, &core, &HEX, 1.0, 12.0, false);
@@ -985,8 +1016,8 @@ mod tests {
         assert_eq!(cf.blank_fill.len(), 1);
         assert_eq!(cf.blank_fill[0].0, 7);
         let fill = cf.blank_fill[0].1;
-        assert!(fill < 5 && fill != 3, "blank fill idx {fill} must be a non-blue palette colour");
-        // Consistency: fp_edge colours equal the model's edge_color on those cells.
+        assert!(fill < 5 && fill != 3, "blank fill idx {fill} must be a non-blue palette color");
+        // Consistency: fp_edge colors equal the model's edge_color on those cells.
         let m = compute_render_model(&core, &HEX, 1.0, 12.0, false, 64).unwrap();
         for &(ci, idx) in &cf.fp_edge {
             assert_eq!(
@@ -994,6 +1025,18 @@ mod tests {
                 m.cells[ci].edge_color.as_deref().unwrap()
             );
         }
+    }
+
+    #[test]
+    fn frame_colors_hex256() {
+        // 12-cell 3×4 grid. cell 0 (top-left) = fp-edge gold (idx 1), cell 1 =
+        // fp-edge red (idx 2). Every entry is a valid palette color (0..=4).
+        let core = hex256_core();
+        let fc = frame_colors(&core, &core, &HEX, 1.0, 12.0, false);
+        assert_eq!(fc.len(), 12);
+        assert_eq!(fc[0], 1); // top-left anchor = gold
+        assert_eq!(fc[1], 2); // 1st-quartile fp-edge = red
+        assert!(fc.iter().all(|&c| c <= 4));
     }
 
     #[test]
@@ -1060,7 +1103,7 @@ mod tests {
         let c0 = &m.cells[0];
         assert_eq!(c0.text.as_deref(), Some("aGVs"));
         assert_eq!(c0.nucleus_bg.as_deref(), Some("#6c6568"));
-        // v10: top-left fingerprint-edge cell → ftok-driven palette colour.
+        // v10: top-left fingerprint-edge cell → ftok-driven palette color.
         assert_eq!(c0.edge_color.as_deref(), Some("#000000"));
         assert_eq!(c0.surround_bits, Some(3731819));
         assert_eq!(c0.quartile, Some(3));
