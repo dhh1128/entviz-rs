@@ -1333,6 +1333,51 @@ mod tests {
     }
 
     #[test]
+    fn render_is_deterministic_across_shapes_and_params() {
+        // TST-F2 / TST-F5: determinism was only proven for one hex-256 input at
+        // default params. Render each of several distinct input shapes and
+        // parameter combinations twice and assert byte-identical output, so a
+        // non-determinism regression on ANY of these paths fails cargo test:
+        //   - hex (4 bits/char)             - UUID (dashed)
+        //   - base64url text-fallback       - large input (>512 bits, truncation
+        //                                       head/middle/tail path)
+        //   - non-default font-size + aspect-ratio
+        let big_hex: String = "0123456789abcdef".repeat(16); // 256 hex chars -> >512 bits
+        let cases: &[(&str, f64, f64, Option<&str>)] = &[
+            // hex, default params
+            ("0123456789abcdef0123456789abcdef", 1.0, 12.0, None),
+            // UUID (dashed) — normalization + semantic-prefix path
+            ("550e8400-e29b-41d4-a716-446655440000", 1.0, 12.0, None),
+            // text fallback -> base64url (the None-parse branch)
+            ("the quick brown fox", 1.0, 12.0, None),
+            // large input -> truncation (head + fingerprint-middle + tail)
+            (big_hex.as_str(), 1.0, 12.0, None),
+            // non-default font size + aspect ratio + a note (bottom strip)
+            ("0123456789abcdef0123456789abcdef", 2.5, 9.0, Some("note1")),
+            // wide aspect ratio, large font
+            ("0123456789abcdef0123456789abcdef0123", 0.4, 24.0, None),
+        ];
+        for (i, &(input, ar, fs, note)) in cases.iter().enumerate() {
+            let a = render(input, ar, fs, note)
+                .unwrap_or_else(|e| panic!("case {i} ({input:.16}) failed: {e:?}"));
+            let b = render(input, ar, fs, note).unwrap();
+            assert_eq!(a, b, "case {i} ({input:.16}) is non-deterministic");
+        }
+    }
+
+    #[test]
+    fn large_input_takes_truncation_path() {
+        // Guard the assumption behind the determinism case above: a >512-bit
+        // input must actually exercise the head/middle/tail truncation path.
+        let big_hex: String = "0123456789abcdef".repeat(16);
+        let svg = render(&big_hex, 1.0, 12.0, None).unwrap();
+        assert!(
+            svg.contains("data-truncated=\"true\""),
+            "expected the large-input truncation path to be exercised"
+        );
+    }
+
+    #[test]
     fn version_stamps_track_crate_and_spec() {
         // MNT-F2 / SPEC-F2: the rendered SVG's data-entviz-lib MUST equal the
         // crate version and data-entviz-version MUST equal SPEC_VERSION, so the
