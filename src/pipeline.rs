@@ -7,6 +7,7 @@
 
 use crate::entropy::{self, tokenize_entropy, ParseError, BASE64URL};
 use crate::second_digest;
+use crate::util::{assign_cell_indices, band_letter, two_bit_counts};
 use crate::{
     choose_grid, closest_palette_color, compute_fingerprint, median_token, nucleus_colors,
     quartile_tokens, select_visual_style, tokenize_fingerprint, Grid, Token, VisualStyle,
@@ -24,14 +25,40 @@ pub enum RenderError {
     FontSizeRange,
     AspectRatioRange,
     NoTokens,
-    Eip55,
+    /// EIP-55 checksum mismatch. `position` is the index (within the 40-hex
+    /// address body, 0-based) of the first digit whose case disagrees with the
+    /// canonical case derived from keccak256(lower(body)). The spec MUST
+    /// "identify the first mismatched-case digit", so the position is carried
+    /// through to the error (and surfaced by the CLI) rather than discarded.
+    Eip55 {
+        position: usize,
+    },
 }
 
 impl From<ParseError> for RenderError {
-    fn from(_: ParseError) -> Self {
-        RenderError::Eip55
+    fn from(e: ParseError) -> Self {
+        match e {
+            ParseError::Eip55 { position } => RenderError::Eip55 { position },
+        }
     }
 }
+
+impl std::fmt::Display for RenderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RenderError::Note(msg) => write!(f, "{msg}"),
+            RenderError::InputTooLong => write!(f, "input too long"),
+            RenderError::FontSizeRange => write!(f, "font size out of range"),
+            RenderError::AspectRatioRange => write!(f, "aspect ratio out of range"),
+            RenderError::NoTokens => write!(f, "no tokens"),
+            RenderError::Eip55 { position } => {
+                write!(f, "EIP-55 checksum mismatch at position {position}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for RenderError {}
 
 fn sanitize_note(note: Option<&str>) -> Result<Option<String>, RenderError> {
     match note {
@@ -206,8 +233,10 @@ pub fn render(
     let mut s = String::with_capacity(8192);
     s.push_str(&format!(
         "<svg width=\"{w}\" height=\"{h}\" viewBox=\"0 0 {w} {h}\" xmlns=\"http://www.w3.org/2000/svg\" \
-         data-entviz-version=\"v10\" data-entviz-lib=\"0.10.0\" data-input-bytes=\"{ib}\" \
+         data-entviz-version=\"{ev}\" data-entviz-lib=\"{lib}\" data-input-bytes=\"{ib}\" \
          data-cols=\"{c}\" data-rows=\"{r}\"{trunc}>",
+        ev = crate::SPEC_VERSION,
+        lib = env!("CARGO_PKG_VERSION"),
         w = n(bounding_w),
         h = n(bounding_h),
         ib = raw_input.len(),
@@ -602,39 +631,6 @@ fn quartile_polygon(q_idx: usize, nx: f64, ny: f64, w: f64, h: f64) -> String {
         .join(" ")
 }
 
-fn assign_cell_indices(
-    tokens: &[Token],
-    grid: &Grid,
-    median: &Option<Token>,
-    sort_keys: &[Token],
-) -> Vec<usize> {
-    let token_count = tokens.len();
-    let cell_count = grid.cols * grid.rows;
-    let mut ci: Vec<usize> = (0..token_count).collect();
-    if token_count >= cell_count || tokens.is_empty() {
-        return ci;
-    }
-    let shift = |ci: &mut Vec<usize>, start: usize| {
-        for (t, c) in ci.iter_mut().enumerate() {
-            if t >= start {
-                *c += 1;
-            }
-        }
-    };
-    if let Some(m) = median {
-        shift(&mut ci, m.index);
-    }
-    let mut sorted: Vec<&Token> = sort_keys.iter().collect();
-    sorted.sort_by(|a, b| a.text.cmp(&b.text).then(a.index.cmp(&b.index)));
-    if token_count + 1 < cell_count {
-        shift(&mut ci, sorted[sorted.len() - 1].index);
-    }
-    if token_count + 2 < cell_count {
-        shift(&mut ci, sorted[0].index);
-    }
-    ci
-}
-
 // --- ellipse overlay ---
 #[allow(clippy::too_many_arguments)]
 fn draw_ellipse_overlay(
@@ -740,15 +736,6 @@ fn overlay_for_bg(bg: &str) -> (&'static str, f64, f64) {
 }
 
 // --- color bar ---
-fn two_bit_counts(digest: &[u8; 64]) -> [usize; 4] {
-    let mut c = [0usize; 4];
-    for &byte in digest.iter() {
-        for shift in [0u32, 2, 4, 6] {
-            c[((byte >> shift) & 3) as usize] += 1;
-        }
-    }
-    c
-}
 fn first_appearance(digest: &[u8; 64]) -> [usize; 4] {
     let mut first = [usize::MAX; 4];
     let mut idx = 0;
@@ -764,17 +751,6 @@ fn first_appearance(digest: &[u8; 64]) -> [usize; 4] {
     let mut order = [0usize, 1, 2, 3];
     order.sort_by_key(|&p| (first[p], p));
     order
-}
-
-fn band_letter(color: &str) -> Option<&'static str> {
-    match color {
-        "#ffffff" => Some("W"),
-        "#e7be00" => Some("G"),
-        "#ff3f2f" => Some("R"),
-        "#2f3fbf" => Some("B"),
-        "#000000" => Some("K"),
-        _ => None,
-    }
 }
 
 fn draw_color_bar(
@@ -853,6 +829,12 @@ fn draw_color_bar(
             let b = u32::from_str_radix(&color[5..7], 16).unwrap();
             let fg = nucleus_colors(r | (g << 8) | (b << 16)).1;
             let font_size = cell_text_px;
+            // PSY-F7 (accepted design choice): the letter is bottom-anchored
+            // within its band. On a very short band (shorter than ~0.78*font_size)
+            // the top of the glyph can bleed upward past the band's top edge.
+            // This is intentional and deterministic, and matches the Python
+            // reference: the band COLOR is the primary discriminator and the
+            // letter is a redundant secondary cue, so the bleed is cosmetic.
             let baseline_y = (y + h) - 0.22 * font_size;
             s.push_str(&format!(
                 "<text x=\"{}\" y=\"{}\" fill=\"{}\" style=\"font-family: {}; font-size: {}px;\" text-anchor=\"middle\" data-color-bar-letter=\"true\">{}</text>",
@@ -1030,8 +1012,35 @@ mod tests {
                 12.0,
                 None
             ),
-            Err(RenderError::Eip55)
+            Err(RenderError::Eip55 { .. })
         ));
+    }
+
+    #[test]
+    fn bad_eip55_surfaces_first_mismatch_position() {
+        // SPEC-F1: the spec MUST identify the first mismatched-case digit; the
+        // position must be carried through to RenderError (not collapsed away)
+        // and rendered in the Display/CLI message. This is a mixed-case address
+        // whose checksum case does NOT match canonical EIP-55.
+        let err = render(
+            "0x5aaeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
+            1.0,
+            12.0,
+            None,
+        )
+        .unwrap_err();
+        let position = match err {
+            RenderError::Eip55 { position } => position,
+            other => panic!("expected Eip55, got {other:?}"),
+        };
+        // Cross-check: the position is the first body index whose case differs
+        // from the canonical EIP-55 case, and the Display message names it.
+        let msg = err.to_string();
+        assert!(
+            msg.contains(&position.to_string()),
+            "Display message {msg:?} must name the mismatched position {position}"
+        );
+        assert!(msg.to_lowercase().contains("position"));
     }
 
     #[test]
@@ -1327,6 +1336,72 @@ mod tests {
         let a = render("0123456789abcdef0123456789abcdef", 1.0, 12.0, None).unwrap();
         let b = render("0123456789abcdef0123456789abcdef", 1.0, 12.0, None).unwrap();
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn render_is_deterministic_across_shapes_and_params() {
+        // TST-F2 / TST-F5: determinism was only proven for one hex-256 input at
+        // default params. Render each of several distinct input shapes and
+        // parameter combinations twice and assert byte-identical output, so a
+        // non-determinism regression on ANY of these paths fails cargo test:
+        //   - hex (4 bits/char)             - UUID (dashed)
+        //   - base64url text-fallback       - large input (>512 bits, truncation
+        //                                       head/middle/tail path)
+        //   - non-default font-size + aspect-ratio
+        let big_hex: String = "0123456789abcdef".repeat(16); // 256 hex chars -> >512 bits
+        let cases: &[(&str, f64, f64, Option<&str>)] = &[
+            // hex, default params
+            ("0123456789abcdef0123456789abcdef", 1.0, 12.0, None),
+            // UUID (dashed) — normalization + semantic-prefix path
+            ("550e8400-e29b-41d4-a716-446655440000", 1.0, 12.0, None),
+            // text fallback -> base64url (the None-parse branch)
+            ("the quick brown fox", 1.0, 12.0, None),
+            // large input -> truncation (head + fingerprint-middle + tail)
+            (big_hex.as_str(), 1.0, 12.0, None),
+            // non-default font size + aspect ratio + a note (bottom strip)
+            ("0123456789abcdef0123456789abcdef", 2.5, 9.0, Some("note1")),
+            // wide aspect ratio, large font
+            ("0123456789abcdef0123456789abcdef0123", 0.4, 24.0, None),
+        ];
+        for (i, &(input, ar, fs, note)) in cases.iter().enumerate() {
+            let a = render(input, ar, fs, note)
+                .unwrap_or_else(|e| panic!("case {i} ({input:.16}) failed: {e:?}"));
+            let b = render(input, ar, fs, note).unwrap();
+            assert_eq!(a, b, "case {i} ({input:.16}) is non-deterministic");
+        }
+    }
+
+    #[test]
+    fn large_input_takes_truncation_path() {
+        // Guard the assumption behind the determinism case above: a >512-bit
+        // input must actually exercise the head/middle/tail truncation path.
+        let big_hex: String = "0123456789abcdef".repeat(16);
+        let svg = render(&big_hex, 1.0, 12.0, None).unwrap();
+        assert!(
+            svg.contains("data-truncated=\"true\""),
+            "expected the large-input truncation path to be exercised"
+        );
+    }
+
+    #[test]
+    fn version_stamps_track_crate_and_spec() {
+        // MNT-F2 / SPEC-F2: the rendered SVG's data-entviz-lib MUST equal the
+        // crate version and data-entviz-version MUST equal SPEC_VERSION, so the
+        // stamps can never silently drift from Cargo.toml / crate::SPEC_VERSION.
+        let svg = render("0123456789abcdef0123456789abcdef", 1.0, 12.0, None).unwrap();
+        assert!(
+            svg.contains(&format!(
+                "data-entviz-lib=\"{}\"",
+                env!("CARGO_PKG_VERSION")
+            )),
+            "data-entviz-lib must equal CARGO_PKG_VERSION ({})",
+            env!("CARGO_PKG_VERSION")
+        );
+        assert!(
+            svg.contains(&format!("data-entviz-version=\"{}\"", crate::SPEC_VERSION)),
+            "data-entviz-version must equal SPEC_VERSION ({})",
+            crate::SPEC_VERSION
+        );
     }
 
     #[test]

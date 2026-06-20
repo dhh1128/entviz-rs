@@ -31,7 +31,7 @@ fn main() {
             print!("{svg}");
         }
         Err(e) => {
-            eprintln!("entviz-rs: rejected: {e:?}");
+            eprintln!("entviz-rs: rejected: {e}");
             std::process::exit(1);
         }
     }

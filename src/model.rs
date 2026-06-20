@@ -11,6 +11,8 @@
 //!
 //! Ground truth: `/home/daniel/code/entviz/compliance/corpus/<name>/model.json`.
 
+use crate::entropy::crockford5;
+use crate::util::{assign_cell_indices, band_letter, two_bit_counts};
 use crate::{
     choose_grid, closest_palette_color, compute_fingerprint, median_token, nucleus_colors,
     quartile_tokens, second_digest, select_visual_style, tokenize, tokenize_fingerprint, Alphabet,
@@ -18,20 +20,6 @@ use crate::{
 };
 
 pub const SPEC_VERSION_V10: &str = "v10";
-
-/// Encode a 24-bit value as 5 lowercase Crockford base32 chars (v9 middle-cell
-/// readout). Mirrors `entropy._crockford5`: high-order first, single-case,
-/// homoglyph-clean (Crockford omits i/l/o/u). Injective since 32^5 ≥ 2^24.
-fn crockford5(quant: u32) -> String {
-    const C: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-    let mut out = [0u8; 5];
-    let mut v = quant;
-    for i in 0..5 {
-        out[4 - i] = C[(v & 0x1F) as usize];
-        v >>= 5;
-    }
-    String::from_utf8(out.to_vec()).unwrap().to_lowercase()
-}
 
 /// Build the 20 renumbered tokens for a large (>512-bit) input: 8 head tokens
 /// (first `8·token_len` chars of `core`), 4 middle tokens (each a Crockford-5
@@ -93,17 +81,6 @@ fn palette_idx(hex: &str) -> u8 {
         .position(|&c| c == hex)
         .map(|i| i as u8)
         .unwrap_or(255)
-}
-
-fn band_letter(color: &str) -> Option<&'static str> {
-    match color {
-        "#ffffff" => Some("W"),
-        "#e7be00" => Some("G"),
-        "#ff3f2f" => Some("R"),
-        "#2f3fbf" => Some("B"),
-        "#000000" => Some("K"),
-        _ => None,
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -272,58 +249,6 @@ fn core_byte_length(core: &str, alphabet: &Alphabet) -> usize {
         6 => n * 6 / 8, // base64 / base64url / base58 / base36 (approx)
         _ => n,
     }
-}
-
-/// Port of `layout.assign_cell_indices` (median + ASCII-last + ASCII-first
-/// shifts, ≤ 3). Returns a vec mapping token_index -> cell_index.
-fn assign_cell_indices(
-    tokens: &[Token],
-    grid: &Grid,
-    median: &Option<Token>,
-    sort_keys: &[Token],
-) -> Vec<usize> {
-    let token_count = tokens.len();
-    let cell_count = grid.cols * grid.rows;
-    let mut cell_idx: Vec<usize> = (0..token_count).collect(); // token_index -> cell_index
-
-    if token_count >= cell_count || tokens.is_empty() {
-        return cell_idx;
-    }
-
-    // Shift: every token whose token_index >= start gets +1 cell index.
-    let shift_from = |cell_idx: &mut Vec<usize>, start: usize| {
-        for (t_idx, ci) in cell_idx.iter_mut().enumerate() {
-            if t_idx >= start {
-                *ci += 1;
-            }
-        }
-    };
-
-    if let Some(m) = median {
-        shift_from(&mut cell_idx, m.index);
-    }
-
-    // ASCII sort of the sort_keys by (text, index).
-    let mut sorted: Vec<&Token> = sort_keys.iter().collect();
-    sorted.sort_by(|a, b| a.text.cmp(&b.text).then(a.index.cmp(&b.index)));
-
-    if token_count + 1 < cell_count {
-        shift_from(&mut cell_idx, sorted[sorted.len() - 1].index);
-    }
-    if token_count + 2 < cell_count {
-        shift_from(&mut cell_idx, sorted[0].index);
-    }
-    cell_idx
-}
-
-fn two_bit_counts(digest: &[u8; 64]) -> [usize; 4] {
-    let mut counts = [0usize; 4];
-    for &byte in digest.iter() {
-        for shift in [0u32, 2, 4, 6] {
-            counts[((byte >> shift) & 0x03) as usize] += 1;
-        }
-    }
-    counts
 }
 
 /// v9 first-appearance order of the 4 patterns across the 256 slices.

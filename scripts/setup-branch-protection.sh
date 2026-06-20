@@ -22,7 +22,7 @@ gh api -X PUT "repos/${REPO}/branches/main/protection" \
 {
   "required_status_checks": {
     "strict": true,
-    "contexts": ["fmt + clippy + test", "spec-sync + Tier-A conformance"]
+    "contexts": ["fmt + clippy + test", "coverage floor", "cargo audit", "spec-sync + Tier-A conformance"]
   },
   "enforce_admins": false,
   "required_pull_request_reviews": {
