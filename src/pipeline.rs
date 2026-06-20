@@ -24,14 +24,40 @@ pub enum RenderError {
     FontSizeRange,
     AspectRatioRange,
     NoTokens,
-    Eip55,
+    /// EIP-55 checksum mismatch. `position` is the index (within the 40-hex
+    /// address body, 0-based) of the first digit whose case disagrees with the
+    /// canonical case derived from keccak256(lower(body)). The spec MUST
+    /// "identify the first mismatched-case digit", so the position is carried
+    /// through to the error (and surfaced by the CLI) rather than discarded.
+    Eip55 {
+        position: usize,
+    },
 }
 
 impl From<ParseError> for RenderError {
-    fn from(_: ParseError) -> Self {
-        RenderError::Eip55
+    fn from(e: ParseError) -> Self {
+        match e {
+            ParseError::Eip55 { position } => RenderError::Eip55 { position },
+        }
     }
 }
+
+impl std::fmt::Display for RenderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RenderError::Note(msg) => write!(f, "{msg}"),
+            RenderError::InputTooLong => write!(f, "input too long"),
+            RenderError::FontSizeRange => write!(f, "font size out of range"),
+            RenderError::AspectRatioRange => write!(f, "aspect ratio out of range"),
+            RenderError::NoTokens => write!(f, "no tokens"),
+            RenderError::Eip55 { position } => {
+                write!(f, "EIP-55 checksum mismatch at position {position}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for RenderError {}
 
 fn sanitize_note(note: Option<&str>) -> Result<Option<String>, RenderError> {
     match note {
@@ -1032,8 +1058,35 @@ mod tests {
                 12.0,
                 None
             ),
-            Err(RenderError::Eip55)
+            Err(RenderError::Eip55 { .. })
         ));
+    }
+
+    #[test]
+    fn bad_eip55_surfaces_first_mismatch_position() {
+        // SPEC-F1: the spec MUST identify the first mismatched-case digit; the
+        // position must be carried through to RenderError (not collapsed away)
+        // and rendered in the Display/CLI message. This is a mixed-case address
+        // whose checksum case does NOT match canonical EIP-55.
+        let err = render(
+            "0x5aaeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
+            1.0,
+            12.0,
+            None,
+        )
+        .unwrap_err();
+        let position = match err {
+            RenderError::Eip55 { position } => position,
+            other => panic!("expected Eip55, got {other:?}"),
+        };
+        // Cross-check: the position is the first body index whose case differs
+        // from the canonical EIP-55 case, and the Display message names it.
+        let msg = err.to_string();
+        assert!(
+            msg.contains(&position.to_string()),
+            "Display message {msg:?} must name the mismatched position {position}"
+        );
+        assert!(msg.to_lowercase().contains("position"));
     }
 
     #[test]
