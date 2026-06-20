@@ -49,6 +49,10 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
         run: |
+          set -euo pipefail
+          # Defense in depth: PR_NUMBER is interpolated into the gh api URL path,
+          # so reject anything that is not a bare positive integer (SEC-F3).
+          [[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || { echo "::error::PR_NUMBER not numeric: $PR_NUMBER"; exit 1; }
           gh api \
             --method POST \
             -H "Accept: application/vnd.github+json" \
@@ -63,6 +67,10 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
         run: |
+          set -euo pipefail
+          # Defense in depth: PR_NUMBER is interpolated into the gh api URL path,
+          # so reject anything that is not a bare positive integer (SEC-F3).
+          [[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || { echo "::error::PR_NUMBER not numeric: $PR_NUMBER"; exit 1; }
           gh api \
             --method DELETE \
             -H "Accept: application/vnd.github+json" \
