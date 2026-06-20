@@ -55,3 +55,38 @@ The `entviz` crate is pre-1.0 and ships from the `main` branch. Security fixes
 are applied to `main` and released as a new version on crates.io; there are no
 long-term support branches. Please ensure you are running the latest published
 version before reporting.
+
+## Threat model / trust boundaries
+
+`entviz` is a pure, deterministic library: it takes an entropy string plus
+rendering parameters and returns an SVG string. It performs no I/O, network, or
+filesystem access, spawns no processes, and contains **zero `unsafe` code**. The
+main trust boundary is the **untrusted input string** and the fact that the
+output SVG is typically **embedded into an HTML page** by a downstream consumer.
+
+- **Input is untrusted.** Callers may pass arbitrary, attacker-controlled
+  strings. Two defenses bound this:
+  - **Output injection** — the only free-text that reaches the SVG is the
+    optional `note`. `sanitize_note` is a MUST-reject gate: a note is rejected
+    unless it is ASCII-alphanumeric and at most 8 characters. All other text
+    written into the SVG (cell glyphs, labels) is XML-escaped via `esc_attr`
+    (escapes `& < > "`) for attribute contexts and `esc_text` (escapes `& < >`)
+    for element-text contexts, so an input cannot break out of its markup
+    context and inject elements/attributes.
+  - **Denial of service** — input is capped at `MAX_INPUT_CHARS` (65536) before
+    parsing, and large inputs are tokenized over only a bounded head + tail
+    window (plus four digest-derived middle tokens), never the full core, so
+    work is bounded regardless of input size.
+
+- **Accepted risk — host-page CSS override.** The SVG carries all visual
+  channels via *inline presentation attributes* (`fill`/`stroke`), which sit at
+  the lowest tier of the CSS cascade. A hostile or careless host page can apply
+  `!important` rules that override these and neutralize the discriminating
+  channels. This is inherent to non-isolated embedded SVG, not a defect in this
+  crate; consumers that need to defend against it should isolate the SVG (e.g.
+  an `<iframe>` or shadow DOM). Treated as an accepted, documented risk.
+
+- **Out of scope.** entviz makes no cryptographic security claim: it is a
+  *visualization* of entropy for human comparison, not a commitment, MAC, or
+  authentication primitive. The SHA-512 fingerprint is used only to derive
+  deterministic visual structure.
