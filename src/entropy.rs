@@ -12,11 +12,12 @@ use crate::Alphabet;
 // --------------------------------------------------------------------------
 // Alphabets (mirror entropy.py)
 // --------------------------------------------------------------------------
-pub const HEX: Alphabet = Alphabet {
-    name: "hex",
-    chars: "0123456789ABCDEF",
-    bits_per_char: 4,
-};
+// HEX and BASE64URL are the crate-root canonical alphabet constants (used by
+// the shared core in lib.rs). Re-export them here so the parsers reference a
+// single definition rather than a second copy (MNT-F3). `crate::entropy::HEX`
+// / `crate::entropy::BASE64URL` remain valid paths for existing call sites.
+pub use crate::{BASE64URL, HEX};
+
 pub const BASE58: Alphabet = Alphabet {
     name: "base58",
     chars: "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz",
@@ -52,12 +53,6 @@ pub const DECIMAL: Alphabet = Alphabet {
     chars: "0123456789",
     bits_per_char: 4,
 };
-pub const BASE64URL: Alphabet = Alphabet {
-    name: "base64url",
-    chars: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_",
-    bits_per_char: 6,
-};
-
 const HEX_CHARS: &str = "0123456789abcdef";
 const BASE58_CHARS: &str = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 const BECH32_CHARS: &str = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
