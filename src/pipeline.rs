@@ -206,8 +206,10 @@ pub fn render(
     let mut s = String::with_capacity(8192);
     s.push_str(&format!(
         "<svg width=\"{w}\" height=\"{h}\" viewBox=\"0 0 {w} {h}\" xmlns=\"http://www.w3.org/2000/svg\" \
-         data-entviz-version=\"v10\" data-entviz-lib=\"0.10.0\" data-input-bytes=\"{ib}\" \
+         data-entviz-version=\"{ev}\" data-entviz-lib=\"{lib}\" data-input-bytes=\"{ib}\" \
          data-cols=\"{c}\" data-rows=\"{r}\"{trunc}>",
+        ev = crate::SPEC_VERSION,
+        lib = env!("CARGO_PKG_VERSION"),
         w = n(bounding_w),
         h = n(bounding_h),
         ib = raw_input.len(),
@@ -1327,6 +1329,27 @@ mod tests {
         let a = render("0123456789abcdef0123456789abcdef", 1.0, 12.0, None).unwrap();
         let b = render("0123456789abcdef0123456789abcdef", 1.0, 12.0, None).unwrap();
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn version_stamps_track_crate_and_spec() {
+        // MNT-F2 / SPEC-F2: the rendered SVG's data-entviz-lib MUST equal the
+        // crate version and data-entviz-version MUST equal SPEC_VERSION, so the
+        // stamps can never silently drift from Cargo.toml / crate::SPEC_VERSION.
+        let svg = render("0123456789abcdef0123456789abcdef", 1.0, 12.0, None).unwrap();
+        assert!(
+            svg.contains(&format!(
+                "data-entviz-lib=\"{}\"",
+                env!("CARGO_PKG_VERSION")
+            )),
+            "data-entviz-lib must equal CARGO_PKG_VERSION ({})",
+            env!("CARGO_PKG_VERSION")
+        );
+        assert!(
+            svg.contains(&format!("data-entviz-version=\"{}\"", crate::SPEC_VERSION)),
+            "data-entviz-version must equal SPEC_VERSION ({})",
+            crate::SPEC_VERSION
+        );
     }
 
     #[test]
