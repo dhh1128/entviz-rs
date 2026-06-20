@@ -152,7 +152,15 @@ pub fn tokenize_fingerprint(digest: &[u8; 64]) -> Vec<Token> {
 }
 
 /// Domain tag for the second, domain-separated digest. The trailing NUL is
-/// included. `v6` is the *construction* version (fixed), not the spec version.
+/// included. `v6` is the *construction* version (fixed), NOT the spec version.
+///
+/// FREEZE: this byte string is part of the on-the-wire fingerprint construction.
+/// It MUST NOT be bumped during a spec-version upgrade (e.g. v10 -> v11). The
+/// `v6` here is decoupled from `SPEC_VERSION` on purpose: changing a single byte
+/// re-keys `second_digest` and therefore silently changes the color-bar markers
+/// on every input AND the middle cells of every large (>512-bit) input — every
+/// previously-rendered large-input fingerprint would change. Do not "tidy" it to
+/// match the spec version; treat it as a frozen magic constant.
 pub const MIDDLE_DOMAIN_TAG: &[u8] = b"entviz/fingerprint-middle/v6\x00";
 
 /// `second = SHA-512(DOMAIN_TAG ‖ core)`. Computed for every input (v9): drives

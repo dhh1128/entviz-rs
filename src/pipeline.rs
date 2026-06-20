@@ -829,6 +829,12 @@ fn draw_color_bar(
             let b = u32::from_str_radix(&color[5..7], 16).unwrap();
             let fg = nucleus_colors(r | (g << 8) | (b << 16)).1;
             let font_size = cell_text_px;
+            // PSY-F7 (accepted design choice): the letter is bottom-anchored
+            // within its band. On a very short band (shorter than ~0.78*font_size)
+            // the top of the glyph can bleed upward past the band's top edge.
+            // This is intentional and deterministic, and matches the Python
+            // reference: the band COLOR is the primary discriminator and the
+            // letter is a redundant secondary cue, so the bleed is cosmetic.
             let baseline_y = (y + h) - 0.22 * font_size;
             s.push_str(&format!(
                 "<text x=\"{}\" y=\"{}\" fill=\"{}\" style=\"font-family: {}; font-size: {}px;\" text-anchor=\"middle\" data-color-bar-letter=\"true\">{}</text>",
