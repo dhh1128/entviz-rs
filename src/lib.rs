@@ -28,6 +28,7 @@ pub const SPEC_VERSION: &str = "v10";
 pub mod entropy;
 pub mod keccak;
 pub mod pipeline;
+mod util;
 
 // The render-model / feature-vector layer exists only to serve the private
 // adversarial grinder (entviz-adversarial), which path-depends on this crate.

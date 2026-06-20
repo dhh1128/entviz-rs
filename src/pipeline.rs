@@ -7,6 +7,7 @@
 
 use crate::entropy::{self, tokenize_entropy, ParseError, BASE64URL};
 use crate::second_digest;
+use crate::util::{assign_cell_indices, band_letter, two_bit_counts};
 use crate::{
     choose_grid, closest_palette_color, compute_fingerprint, median_token, nucleus_colors,
     quartile_tokens, select_visual_style, tokenize_fingerprint, Grid, Token, VisualStyle,
@@ -630,39 +631,6 @@ fn quartile_polygon(q_idx: usize, nx: f64, ny: f64, w: f64, h: f64) -> String {
         .join(" ")
 }
 
-fn assign_cell_indices(
-    tokens: &[Token],
-    grid: &Grid,
-    median: &Option<Token>,
-    sort_keys: &[Token],
-) -> Vec<usize> {
-    let token_count = tokens.len();
-    let cell_count = grid.cols * grid.rows;
-    let mut ci: Vec<usize> = (0..token_count).collect();
-    if token_count >= cell_count || tokens.is_empty() {
-        return ci;
-    }
-    let shift = |ci: &mut Vec<usize>, start: usize| {
-        for (t, c) in ci.iter_mut().enumerate() {
-            if t >= start {
-                *c += 1;
-            }
-        }
-    };
-    if let Some(m) = median {
-        shift(&mut ci, m.index);
-    }
-    let mut sorted: Vec<&Token> = sort_keys.iter().collect();
-    sorted.sort_by(|a, b| a.text.cmp(&b.text).then(a.index.cmp(&b.index)));
-    if token_count + 1 < cell_count {
-        shift(&mut ci, sorted[sorted.len() - 1].index);
-    }
-    if token_count + 2 < cell_count {
-        shift(&mut ci, sorted[0].index);
-    }
-    ci
-}
-
 // --- ellipse overlay ---
 #[allow(clippy::too_many_arguments)]
 fn draw_ellipse_overlay(
@@ -768,15 +736,6 @@ fn overlay_for_bg(bg: &str) -> (&'static str, f64, f64) {
 }
 
 // --- color bar ---
-fn two_bit_counts(digest: &[u8; 64]) -> [usize; 4] {
-    let mut c = [0usize; 4];
-    for &byte in digest.iter() {
-        for shift in [0u32, 2, 4, 6] {
-            c[((byte >> shift) & 3) as usize] += 1;
-        }
-    }
-    c
-}
 fn first_appearance(digest: &[u8; 64]) -> [usize; 4] {
     let mut first = [usize::MAX; 4];
     let mut idx = 0;
@@ -792,17 +751,6 @@ fn first_appearance(digest: &[u8; 64]) -> [usize; 4] {
     let mut order = [0usize, 1, 2, 3];
     order.sort_by_key(|&p| (first[p], p));
     order
-}
-
-fn band_letter(color: &str) -> Option<&'static str> {
-    match color {
-        "#ffffff" => Some("W"),
-        "#e7be00" => Some("G"),
-        "#ff3f2f" => Some("R"),
-        "#2f3fbf" => Some("B"),
-        "#000000" => Some("K"),
-        _ => None,
-    }
 }
 
 fn draw_color_bar(
