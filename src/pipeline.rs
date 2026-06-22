@@ -14,7 +14,7 @@ use crate::{
 };
 
 const DPI: f64 = 96.0;
-const NOTE_MAX_LEN: usize = 8;
+const NOTE_MAX_LEN: usize = 10;
 const MAX_INPUT_CHARS: usize = 65536;
 const MONOSPACE_FONT_FAMILY: &str = "\"JetBrains Mono\", \"Menlo\", \"Consolas\", \"DejaVu Sans Mono\", \"Liberation Mono\", \"Roboto Mono\", \"Noto Sans Mono\", monospace";
 
@@ -65,14 +65,26 @@ fn sanitize_note(note: Option<&str>) -> Result<Option<String>, RenderError> {
         None => Ok(None),
         Some("") => Ok(None),
         Some(n) => {
+            // Length first, then charset (matches the reference order so the
+            // surfaced error catalog is identical across implementations).
             if n.chars().count() > NOTE_MAX_LEN {
                 return Err(RenderError::Note(format!(
-                    "note too long: {}",
+                    "note must be at most {} characters (got {})",
+                    NOTE_MAX_LEN,
                     n.chars().count()
                 )));
             }
-            if n.is_empty() || !n.chars().all(|c| c.is_ascii_alphanumeric()) {
-                return Err(RenderError::Note("note must be ASCII alphanumeric".into()));
+            // Printable ASCII only (U+0020 space through U+007E tilde). This
+            // excludes all control/format characters, bidi, zero-width and
+            // combining marks, and every non-ASCII confusable by construction —
+            // the whole Unicode-spoofing surface is gone. The note is still
+            // XML-escaped on output, so injection is handled regardless.
+            if !n.chars().all(|c| ('\u{20}'..='\u{7e}').contains(&c)) {
+                return Err(RenderError::Note(
+                    "note must be printable ASCII (U+0020-U+007E); no control or \
+                     non-ASCII characters"
+                        .into(),
+                ));
             }
             Ok(Some(n.to_string()))
         }
@@ -1208,7 +1220,9 @@ mod tests {
 
     #[test]
     fn rejects_bad_note_and_fontsize() {
-        assert!(render("a1b2c3d4e5f6a7b8", 1.0, 12.0, Some("two words")).is_err());
+        // "two words" is now VALID (printable ASCII, <=10); a tab is not.
+        assert!(render("a1b2c3d4e5f6a7b8", 1.0, 12.0, Some("two words")).is_ok());
+        assert!(render("a1b2c3d4e5f6a7b8", 1.0, 12.0, Some("ab\tcd")).is_err());
         assert!(render("a1b2c3d4e5f6a7b8", 1.0, 4.0, None).is_err());
         assert!(render("a1b2c3d4e5f6a7b8", 1.0, 40.0, None).is_err());
     }
@@ -1224,16 +1238,60 @@ mod tests {
             sanitize_note(Some("abc123")).unwrap().as_deref(),
             Some("abc123")
         );
-        // too long (> 8 chars)
+        // Printable ASCII now accepted: spaces and punctuation are valid.
+        assert_eq!(
+            sanitize_note(Some("two words")).unwrap().as_deref(),
+            Some("two words")
+        );
+        assert_eq!(
+            sanitize_note(Some("a.b_c-d!")).unwrap().as_deref(),
+            Some("a.b_c-d!")
+        );
+        // Boundary chars U+0020 (space) and U+007E (tilde) are in range.
+        assert_eq!(sanitize_note(Some(" ")).unwrap().as_deref(), Some(" "));
+        assert_eq!(sanitize_note(Some("~")).unwrap().as_deref(), Some("~"));
+        // Exactly 10 chars is allowed; 11 is rejected (length checked first).
+        assert_eq!(
+            sanitize_note(Some("0123456789")).unwrap().as_deref(),
+            Some("0123456789")
+        );
         assert!(matches!(
-            sanitize_note(Some("ninechars")),
+            sanitize_note(Some("toolongnote")), // 11 chars
             Err(RenderError::Note(_))
         ));
-        // non-alphanumeric
+        // Control char (tab) rejected.
         assert!(matches!(
-            sanitize_note(Some("a b")),
+            sanitize_note(Some("ab\tcd")),
             Err(RenderError::Note(_))
         ));
+        // Non-ASCII rejected (café — the é is U+00E9).
+        assert!(matches!(
+            sanitize_note(Some("caf\u{e9}")),
+            Err(RenderError::Note(_))
+        ));
+        // Bidi override (U+202E) and zero-width space (U+200B) rejected.
+        assert!(matches!(
+            sanitize_note(Some("a\u{202e}b")),
+            Err(RenderError::Note(_))
+        ));
+        assert!(matches!(
+            sanitize_note(Some("a\u{200b}b")),
+            Err(RenderError::Note(_))
+        ));
+    }
+
+    #[test]
+    fn note_xml_special_chars_are_escaped() {
+        // < > & " are valid printable-ASCII note chars now, so they MUST be
+        // XML-escaped in both the data-user-note attribute and the text node;
+        // no raw "<b>" may appear in the output.
+        let svg = render("a1b2c3d4e5f6a7b8", 1.0, 12.0, Some("a<b>&\"x")).unwrap();
+        // Text node: < > & escaped (" stays raw — legal in XML text).
+        assert!(svg.contains("(a&lt;b&gt;&amp;\"x)"));
+        // Attribute: < > & " all escaped.
+        assert!(svg.contains("data-user-note=\"a&lt;b&gt;&amp;&quot;x\""));
+        // No raw tag leaked.
+        assert!(!svg.contains("<b>"));
     }
 
     // ===================================================================
