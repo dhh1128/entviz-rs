@@ -297,7 +297,16 @@ pub fn render(
         esc_attr(&style.bg_color)
     ));
 
-    // Layer 1: edges
+    // Layer 1: surround edges. v10: a filled cell's 24-bit surround pattern is
+    // emitted as ONE <path> (one subpath per set box) instead of one <rect> per
+    // box. The bit pattern + edge color are DECLARED on the cell group below
+    // (data-surround-bits / data-edge-color), so a checker recovers the channel
+    // from the attribute, not the box geometry; this path is purely pixels. The
+    // path MUST stay in this surround layer (painted before the cell groups and
+    // the ellipse overlay) so paint order is preserved (the overlay composites
+    // over the boxes exactly as before).
+    let mut surround_by_cell: std::collections::HashMap<usize, (u32, String)> =
+        std::collections::HashMap::new();
     s.push_str("<g>");
     for &(_token, ftok, ci, ref nucleus_bg) in &token_cells {
         let edge_color = if fp_edge_cells.contains(&ci) {
@@ -309,20 +318,31 @@ pub fn render(
         let row = ci / grid.cols;
         let cell_left = grid_left + col as f64 * cell_w;
         let cell_top = grid_top + row as f64 * cell_h;
+        let mut bits = 0u32;
+        let mut d = String::new();
         for i in 0..24u32 {
             if (ftok.quant >> i) & 1 == 0 {
                 continue;
             }
+            bits |= 1 << i;
             let (ox, oy) = box_origin(i, cell_left, cell_top, box_w, box_h);
-            s.push_str(&format!(
-                "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"{}\"/>",
+            d.push_str(&format!(
+                "M{} {}h{}v{}h-{}z",
                 n(ox),
                 n(oy),
                 n(box_w),
                 n(box_h),
-                esc_attr(&edge_color)
+                n(box_w)
             ));
         }
+        if !d.is_empty() {
+            s.push_str(&format!(
+                "<path fill=\"{}\" d=\"{}\"/>",
+                esc_attr(&edge_color),
+                d
+            ));
+        }
+        surround_by_cell.insert(ci, (bits, edge_color));
     }
     s.push_str("</g>");
 
@@ -429,6 +449,16 @@ pub fn render(
         }
         if let Some((q_idx, _)) = quartile_of_cell.get(&ci) {
             attrs.push_str(&format!(" data-cell-quartile=\"{}\"", q_idx + 1));
+        }
+        // v10: a filled cell declares its surround channel here (hex bit pattern
+        // + edge color); the boxes themselves were drawn as a path in the
+        // surround layer above. data-edge-color is omitted when no box is set
+        // (edge color is then undefined, matching the render model).
+        if let Some((bits, edge_color)) = surround_by_cell.get(&ci) {
+            attrs.push_str(&format!(" data-surround-bits=\"0x{:x}\"", bits));
+            if *bits != 0 {
+                attrs.push_str(&format!(" data-edge-color=\"{}\"", esc_attr(edge_color)));
+            }
         }
         s.push_str(&format!("<g{}>", attrs));
 
@@ -1069,6 +1099,71 @@ mod tests {
         assert!(svg.contains("data-rows=\"4\""));
         assert!(svg.contains("data-channel=\"color-bar\" data-bar-slots="));
         assert!(svg.ends_with("</svg>"));
+    }
+
+    #[test]
+    fn surround_declared_on_cell_and_path_subpaths_match_bits() {
+        // v10: each filled cell group declares data-surround-bits (parseable as
+        // hex) and, when bits != 0, data-edge-color. The surround paths draw
+        // exactly one box ('M' subpath) per set bit; summed over all cells the
+        // path subpath count must equal the total popcount of declared bits.
+        let svg = render(
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            1.0,
+            12.0,
+            None,
+        )
+        .unwrap();
+
+        // Walk every cell group, parse its declared bits, and confirm
+        // data-edge-color presence matches bits != 0.
+        let mut total_bits = 0u32;
+        let mut saw_cell = false;
+        for chunk in svg.split("data-channel=\"cell\"").skip(1) {
+            // the group's attributes run until the closing '>' of its open tag
+            let tag = &chunk[..chunk.find('>').unwrap()];
+            saw_cell = true;
+            let bits_attr = extract_attr(tag, "data-surround-bits");
+            if let Some(bits_hex) = bits_attr {
+                let hex = bits_hex.trim_start_matches("0x");
+                let bits = u32::from_str_radix(hex, 16).expect("hex-parseable bits");
+                total_bits += bits.count_ones();
+                let has_edge = extract_attr(tag, "data-edge-color").is_some();
+                assert_eq!(
+                    has_edge,
+                    bits != 0,
+                    "data-edge-color present iff bits != 0 (tag: {tag})"
+                );
+            }
+        }
+        assert!(saw_cell, "no cell groups found");
+        assert!(total_bits > 0, "no surround bits set");
+
+        // Count 'M' subpaths across every surround <path>. The surround paths
+        // are the <path fill="#..." d="M..."> emitted before the cell groups;
+        // the only other path (blank-map plus marker) carries data-blank-map-*.
+        let mut total_subpaths = 0u32;
+        for chunk in svg.split("<path ").skip(1) {
+            let tag = &chunk[..chunk.find('>').unwrap()];
+            if tag.contains("data-blank-map-") {
+                continue;
+            }
+            if let Some(d) = extract_attr(tag, "d") {
+                total_subpaths += d.matches('M').count() as u32;
+            }
+        }
+        assert_eq!(
+            total_subpaths, total_bits,
+            "surround path subpath count must equal total popcount of declared bits"
+        );
+    }
+
+    // Tiny attribute extractor for the test above (key="value" within a tag).
+    fn extract_attr<'a>(tag: &'a str, key: &str) -> Option<&'a str> {
+        let needle = format!("{key}=\"");
+        let start = tag.find(&needle)? + needle.len();
+        let end = tag[start..].find('"')? + start;
+        Some(&tag[start..end])
     }
 
     #[test]
