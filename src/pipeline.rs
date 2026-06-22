@@ -91,8 +91,23 @@ fn esc_text(s: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
 }
+/// Serialize a coordinate per the spec's numeric-serialization rule: a finite
+/// plain decimal, never exponential, in the compact form (<=3 fractional
+/// digits, no trailing zeros, integers without a decimal point, -0 as 0). The
+/// rounding mode is unconstrained by the spec; Rust's `{:.3}` rounds half-to-
+/// even, and the checker's 0.05 px tolerance absorbs cross-impl rounding diffs.
 fn n(x: f64) -> String {
-    format!("{}", x)
+    if !x.is_finite() {
+        return "0".to_string(); // coordinates are always finite; defensive
+    }
+    let mut s = format!("{:.3}", x);
+    if s.contains('.') {
+        s = s.trim_end_matches('0').trim_end_matches('.').to_string();
+    }
+    if s.is_empty() || s == "-0" {
+        s = "0".to_string();
+    }
+    s
 }
 
 /// Render entropy as an entviz SVG string.
@@ -986,6 +1001,56 @@ fn b64url_encode(data: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn n_emits_compact_plain_decimals() {
+        // Compact form: integers without a point, <=3 fractional digits, no
+        // trailing zeros, -0 -> 0, and never exponential notation.
+        assert_eq!(n(27.0), "27");
+        assert_eq!(n(240.0), "240");
+        assert_eq!(n(0.5), "0.5");
+        assert_eq!(n(131.323_942_158_859_92), "131.324");
+        assert_eq!(n(-0.0), "0");
+        assert_eq!(n(-0.0004), "0"); // rounds to zero magnitude
+        assert_eq!(n(-1.5), "-1.5");
+        assert_eq!(n(0.000_000_1), "0"); // would be 1e-7 via Display; must not be exponential
+        assert!(!n(0.000_000_1).contains('e'));
+        assert!(!n(1234.5).contains('e'));
+    }
+
+    #[test]
+    fn coordinates_are_compact_plain_decimals() {
+        // Every numeric SVG attribute value must be a compact plain decimal
+        // (<=3 fractional digits, no exponential notation). Catches any
+        // coordinate that bypasses n() (the JS port had exactly such a bug in
+        // an ellipse stroke-width). Attribute values are the odd segments when
+        // splitting on the quote character.
+        let long = "a".repeat(66); // forces a blank-cell map + ellipse overlay
+        for input in [
+            "0123456789abcdef0123456789abcdef",
+            "550e8400-e29b-41d4-a716-446655440000",
+            &long,
+        ] {
+            let svg = render(input, 1.0, 12.0, None).unwrap();
+            for (i, token) in svg.split('"').enumerate() {
+                if i % 2 == 0 {
+                    continue; // tag text, not an attribute value
+                }
+                if token.parse::<f64>().is_ok() {
+                    assert!(
+                        !token.contains(['e', 'E']),
+                        "exponential notation in {token:?}"
+                    );
+                    if let Some(frac) = token.split('.').nth(1) {
+                        assert!(
+                            frac.len() <= 3,
+                            "more than 3 fractional digits in {token:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn renders_hex256() {
