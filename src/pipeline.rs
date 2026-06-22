@@ -247,9 +247,16 @@ pub fn render(
     // ===================== build SVG =====================
     let mut s = String::with_capacity(8192);
     s.push_str(&format!(
+        // font-family is an inherited SVG presentation property: set the
+        // monospace chain ONCE here so every descendant <text> inherits it,
+        // and each <text> carries only a compact font-size attribute (not the
+        // full per-text `style="font-family:...; font-size:Npx;"`). Mirrors the
+        // Python anchor's hoist; checker accepts either form.
         "<svg width=\"{w}\" height=\"{h}\" viewBox=\"0 0 {w} {h}\" xmlns=\"http://www.w3.org/2000/svg\" \
+         font-family=\"{ff}\" \
          data-entviz-version=\"{ev}\" data-entviz-lib=\"{lib}\" data-input-bytes=\"{ib}\" \
          data-cols=\"{c}\" data-rows=\"{r}\"{trunc}>",
+        ff = esc_attr(MONOSPACE_FONT_FAMILY),
         ev = crate::SPEC_VERSION,
         lib = env!("CARGO_PKG_VERSION"),
         w = n(bounding_w),
@@ -524,11 +531,10 @@ pub fn render(
             let cx = nx + nucleus_w / 2.0;
             let cy = ny + nucleus_h / 2.0;
             s.push_str(&format!(
-                "<text x=\"{}\" y=\"{}\" fill=\"{}\" style=\"font-family: {}; font-size: {}px;\" text-anchor=\"middle\" dominant-baseline=\"central\">{}</text>",
+                "<text x=\"{}\" y=\"{}\" fill=\"{}\" font-size=\"{}\" text-anchor=\"middle\" dominant-baseline=\"central\">{}</text>",
                 n(cx),
                 n(cy),
                 esc_attr(&fg_color),
-                esc_attr(MONOSPACE_FONT_FAMILY),
                 n(text_px),
                 esc_text(&token.text)
             ));
@@ -852,11 +858,10 @@ fn draw_color_bar(
             // letter is a redundant secondary cue, so the bleed is cosmetic.
             let baseline_y = (y + h) - 0.22 * font_size;
             s.push_str(&format!(
-                "<text x=\"{}\" y=\"{}\" fill=\"{}\" style=\"font-family: {}; font-size: {}px;\" text-anchor=\"middle\" data-color-bar-letter=\"true\">{}</text>",
+                "<text x=\"{}\" y=\"{}\" fill=\"{}\" font-size=\"{}\" text-anchor=\"middle\" data-color-bar-letter=\"true\">{}</text>",
                 n(bar_cx),
                 n(baseline_y),
                 esc_attr(&fg),
-                esc_attr(MONOSPACE_FONT_FAMILY),
                 n(font_size),
                 esc_text(&l.to_lowercase())
             ));
@@ -922,11 +927,9 @@ fn draw_label_strips(
     truncated_bytes: Option<usize>,
     note: &Option<String>,
 ) {
-    let style_attr = format!(
-        "font-family: {}; font-size: {}px;",
-        MONOSPACE_FONT_FAMILY,
-        n(text_px)
-    );
+    // font-family is inherited from the root <svg>; each label <text> carries
+    // only a compact font-size presentation attribute.
+    let font_size_attr = format!("font-size=\"{}\"", n(text_px));
     let rest_text = if !type_name.is_empty() {
         let mut t = format!("{}:", type_name);
         if let Some(p) = prefix {
@@ -942,18 +945,18 @@ fn draw_label_strips(
     s.push_str("<g data-channel=\"label-top\">");
     if truncated_bytes.is_some() {
         s.push_str(&format!(
-            "<text x=\"{}\" y=\"{}\" fill=\"#666666\" style=\"{}\" dominant-baseline=\"central\"><tspan fill=\"#a00000\" font-weight=\"bold\">fingerprint of </tspan>{}</text>",
+            "<text x=\"{}\" y=\"{}\" fill=\"#666666\" {} dominant-baseline=\"central\"><tspan fill=\"#a00000\" font-weight=\"bold\">fingerprint of </tspan>{}</text>",
             n(grid_left),
             n(top_cy),
-            esc_attr(&style_attr),
+            font_size_attr,
             esc_text(&rest_text),
         ));
     } else {
         s.push_str(&format!(
-            "<text x=\"{}\" y=\"{}\" fill=\"#666666\" style=\"{}\" dominant-baseline=\"central\">{}</text>",
+            "<text x=\"{}\" y=\"{}\" fill=\"#666666\" {} dominant-baseline=\"central\">{}</text>",
             n(grid_left),
             n(top_cy),
-            esc_attr(&style_attr),
+            font_size_attr,
             esc_text(&rest_text),
         ));
     }
@@ -963,10 +966,10 @@ fn draw_label_strips(
         let bottom_cy = grid_bottom + nucleus_h / 2.0;
         s.push_str("<g data-channel=\"label-bottom\">");
         s.push_str(&format!(
-            "<text x=\"{}\" y=\"{}\" fill=\"#666666\" style=\"{}\" text-anchor=\"end\" dominant-baseline=\"central\">",
+            "<text x=\"{}\" y=\"{}\" fill=\"#666666\" {} text-anchor=\"end\" dominant-baseline=\"central\">",
             n(grid_right),
             n(bottom_cy),
-            esc_attr(&style_attr),
+            font_size_attr,
         ));
         match (suffix, note) {
             (Some(suf), Some(nt)) => {
@@ -1474,5 +1477,52 @@ mod tests {
         // hex (4 bits/char) scales cell text to 0.75; just assert it renders text.
         let svg = render("0123456789abcdef0123456789abcdef", 1.0, 12.0, None).unwrap();
         assert!(svg.contains("<text"));
+    }
+
+    #[test]
+    fn font_family_hoisted_to_root_every_text_has_font_size() {
+        // The monospace chain is set ONCE on the root <svg> (an inherited
+        // presentation property), not repeated per <text>. Every <text> carries
+        // a compact font-size attribute and NO per-text font-family. Render a
+        // payload with a suffix so both label strips are present, plus a UUID
+        // for the color-bar letters and cell text.
+        for input in [
+            "0123456789abcdef0123456789abcdef",
+            "550e8400-e29b-41d4-a716-446655440000",
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZ user@example",
+        ] {
+            let svg = render(input, 1.0, 12.0, None).unwrap();
+
+            // font-family appears exactly once, on the root <svg>, with the
+            // documented chain (a stable marker token suffices).
+            assert_eq!(
+                svg.matches("font-family=").count(),
+                1,
+                "font-family must appear exactly once (root <svg>) for {input:?}"
+            );
+            assert_eq!(
+                svg.matches("JetBrains").count(),
+                1,
+                "font chain marker must appear once (root <svg>) for {input:?}"
+            );
+            // No <text> should carry the legacy `style="font-family:..."`.
+            assert!(
+                !svg.contains("style=\"font-family"),
+                "no <text> should carry a per-text font-family style for {input:?}"
+            );
+
+            // Every <text> element must carry a font-size attribute.
+            for text_el in svg.split("<text").skip(1) {
+                let tag = &text_el[..text_el.find('>').unwrap()];
+                assert!(
+                    tag.contains("font-size=\""),
+                    "<text {tag}> is missing a font-size attribute for {input:?}"
+                );
+                assert!(
+                    !tag.contains("font-family"),
+                    "<text {tag}> must not set its own font-family for {input:?}"
+                );
+            }
+        }
     }
 }
