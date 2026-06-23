@@ -762,6 +762,91 @@ fn parse_gitoid(text: &str) -> PResult {
     ))
 }
 
+// ---- DID / URN (RFC 8141) ----
+// Both bind by prefix-fold (prefix_semantic=true): no type, base64url alphabet,
+// core kept verbatim, suffix None.
+
+// DID: ^did:([a-z0-9]+):([A-Za-z0-9._%:-]+)(?:[/?#].*)?$
+// method = lowercase [a-z0-9]+; method-specific-id = [A-Za-z0-9._%:-]+ (MAY
+// contain ':'), ending only at the first '/', '?', or '#' (DID-URL tail dropped).
+fn parse_did(text: &str) -> PResult {
+    let rest = match text.strip_prefix("did:") {
+        Some(r) => r,
+        None => return Ok(None),
+    };
+    // method = [a-z0-9]+ up to the next ':'
+    let colon = match rest.find(':') {
+        Some(i) => i,
+        None => return Ok(None),
+    };
+    let method = &rest[..colon];
+    if method.is_empty()
+        || !method
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+    {
+        return Ok(None);
+    }
+    let body = &rest[colon + 1..];
+    // method-specific-id ends at the first '/', '?', or '#'.
+    let msid_end = body
+        .find(|c| c == '/' || c == '?' || c == '#')
+        .unwrap_or(body.len());
+    let msid = &body[..msid_end];
+    if msid.is_empty()
+        || !msid
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '%' | ':' | '-'))
+    {
+        return Ok(None);
+    }
+    let prefix = format!("did:{method}:");
+    Ok(Some(
+        Parsed::new("", BASE64URL, Some(prefix), msid.to_string(), None).semantic(),
+    ))
+}
+
+// URN (RFC 8141): ^urn:([A-Za-z0-9][A-Za-z0-9-]{0,31}):([^?#]+)(?:[?#].*)?$
+// scheme + NID are case-insensitive (NID is lowercased in the prefix); NSS keeps
+// '/' and ends only at '?' or '#' (r-/q-/f-components dropped); NSS case preserved.
+fn parse_urn(text: &str) -> PResult {
+    let low = text.to_lowercase();
+    if !low.starts_with("urn:") {
+        return Ok(None);
+    }
+    let rest = &text[4..]; // keep original case for NSS
+    let colon = match rest.find(':') {
+        Some(i) => i,
+        None => return Ok(None),
+    };
+    let nid = &rest[..colon];
+    // NID = [A-Za-z0-9][A-Za-z0-9-]{0,31} (1..=32 chars)
+    let nid_chars: Vec<char> = nid.chars().collect();
+    if nid_chars.is_empty() || nid_chars.len() > 32 {
+        return Ok(None);
+    }
+    if !nid_chars[0].is_ascii_alphanumeric() {
+        return Ok(None);
+    }
+    if !nid_chars[1..]
+        .iter()
+        .all(|&c| c.is_ascii_alphanumeric() || c == '-')
+    {
+        return Ok(None);
+    }
+    let body = &rest[colon + 1..];
+    // NSS = [^?#]+ ; ends at the first '?' or '#'.
+    let nss_end = body.find(|c| c == '?' || c == '#').unwrap_or(body.len());
+    let nss = &body[..nss_end];
+    if nss.is_empty() {
+        return Ok(None);
+    }
+    let prefix = format!("urn:{}:", nid.to_lowercase());
+    Ok(Some(
+        Parsed::new("", BASE64URL, Some(prefix), nss.to_string(), None).semantic(),
+    ))
+}
+
 // ---- bech32 checksum (generic Cosmos-style) ----
 fn bech32_polymod(values: &[u32]) -> u32 {
     const GEN: [u32; 5] = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3];
@@ -1030,8 +1115,8 @@ fn eos_regex(text: &str) -> bool {
 type ParserFn = fn(&str) -> PResult;
 
 const PARSERS: &[ParserFn] = &[
-    // parse_hex_multihash and parse_did are not exercised by the corpus and are
-    // omitted; the remaining order matches entropy.py's parse_funcs.
+    // parse_hex_multihash is not exercised by the corpus and is omitted; the
+    // remaining order matches entropy.py's parse_funcs (incl. parse_did/parse_urn).
     parse_cesr,
     parse_ssh_key,
     parse_bitcoin_address,
@@ -1045,7 +1130,8 @@ const PARSERS: &[ParserFn] = &[
     parse_ulid,
     parse_snowflake,
     parse_lei,
-    // parse_did omitted
+    parse_did,
+    parse_urn,
     parse_swhid,
     parse_gitoid,
     parse_bech32_address,
@@ -1244,6 +1330,69 @@ mod tests {
         .unwrap();
         assert!(g.prefix_semantic);
         assert_eq!(g.prefix.as_deref(), Some("gitoid:blob:sha256:"));
+    }
+
+    #[test]
+    fn did_parsing() {
+        // did:web basic
+        let p = parse("did:web:example.com").unwrap().unwrap();
+        assert_eq!(p.type_name, "");
+        assert_eq!(p.prefix.as_deref(), Some("did:web:"));
+        assert_eq!(p.core, "example.com");
+        assert!(p.prefix_semantic);
+        assert!(p.suffix.is_none());
+
+        // did:web with colon path segments (core keeps colons, NOT case-folded)
+        let p = parse("did:web:example.com%3A3000:user:Alice").unwrap().unwrap();
+        assert_eq!(p.prefix.as_deref(), Some("did:web:"));
+        assert_eq!(p.core, "example.com%3A3000:user:Alice");
+        assert!(p.prefix_semantic);
+
+        // did:web with /path?q#frag -> DID-URL tail dropped, core == bare
+        let bare = parse("did:web:example.com:user:Alice").unwrap().unwrap();
+        let tailed = parse("did:web:example.com:user:Alice/path?q=1#frag")
+            .unwrap()
+            .unwrap();
+        assert_eq!(tailed.core, bare.core);
+        assert_eq!(tailed.core, "example.com:user:Alice");
+        assert_eq!(tailed.prefix.as_deref(), Some("did:web:"));
+
+        // did:key fragment dropped
+        let p = parse("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK#z6Mkha")
+            .unwrap()
+            .unwrap();
+        assert_eq!(p.prefix.as_deref(), Some("did:key:"));
+        assert_eq!(p.core, "z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK");
+        assert!(p.prefix_semantic);
+    }
+
+    #[test]
+    fn urn_parsing() {
+        // urn:isbn basic
+        let p = parse("urn:isbn:0451450523").unwrap().unwrap();
+        assert_eq!(p.type_name, "");
+        assert_eq!(p.prefix.as_deref(), Some("urn:isbn:"));
+        assert_eq!(p.core, "0451450523");
+        assert!(p.prefix_semantic);
+        assert!(p.suffix.is_none());
+
+        // URN:ISBN: lowercases prefix (NID) only; NSS case preserved
+        let p = parse("URN:ISBN:X0451450523abc").unwrap().unwrap();
+        assert_eq!(p.prefix.as_deref(), Some("urn:isbn:"));
+        assert_eq!(p.core, "X0451450523abc");
+
+        // NSS keeps '/'
+        let p = parse("urn:example:weather/oregon/portland")
+            .unwrap()
+            .unwrap();
+        assert_eq!(p.prefix.as_deref(), Some("urn:example:"));
+        assert_eq!(p.core, "weather/oregon/portland");
+
+        // r-/q-/f-components dropped (?=... and #frag)
+        let p = parse("urn:example:foo-bar?=baz=1#section").unwrap().unwrap();
+        assert_eq!(p.prefix.as_deref(), Some("urn:example:"));
+        assert_eq!(p.core, "foo-bar");
+        assert!(p.prefix_semantic);
     }
 
     #[test]
