@@ -789,9 +789,7 @@ fn parse_did(text: &str) -> PResult {
     }
     let body = &rest[colon + 1..];
     // method-specific-id ends at the first '/', '?', or '#'.
-    let msid_end = body
-        .find(|c| c == '/' || c == '?' || c == '#')
-        .unwrap_or(body.len());
+    let msid_end = body.find(['/', '?', '#']).unwrap_or(body.len());
     let msid = &body[..msid_end];
     if msid.is_empty()
         || !msid
@@ -836,7 +834,7 @@ fn parse_urn(text: &str) -> PResult {
     }
     let body = &rest[colon + 1..];
     // NSS = [^?#]+ ; ends at the first '?' or '#'.
-    let nss_end = body.find(|c| c == '?' || c == '#').unwrap_or(body.len());
+    let nss_end = body.find(['?', '#']).unwrap_or(body.len());
     let nss = &body[..nss_end];
     if nss.is_empty() {
         return Ok(None);
@@ -1343,7 +1341,9 @@ mod tests {
         assert!(p.suffix.is_none());
 
         // did:web with colon path segments (core keeps colons, NOT case-folded)
-        let p = parse("did:web:example.com%3A3000:user:Alice").unwrap().unwrap();
+        let p = parse("did:web:example.com%3A3000:user:Alice")
+            .unwrap()
+            .unwrap();
         assert_eq!(p.prefix.as_deref(), Some("did:web:"));
         assert_eq!(p.core, "example.com%3A3000:user:Alice");
         assert!(p.prefix_semantic);
@@ -1389,7 +1389,9 @@ mod tests {
         assert_eq!(p.core, "weather/oregon/portland");
 
         // r-/q-/f-components dropped (?=... and #frag)
-        let p = parse("urn:example:foo-bar?=baz=1#section").unwrap().unwrap();
+        let p = parse("urn:example:foo-bar?=baz=1#section")
+            .unwrap()
+            .unwrap();
         assert_eq!(p.prefix.as_deref(), Some("urn:example:"));
         assert_eq!(p.core, "foo-bar");
         assert!(p.prefix_semantic);
