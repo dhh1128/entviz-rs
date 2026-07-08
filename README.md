@@ -49,6 +49,25 @@ full Tier-A/Tier-B golden comparison is the Python runner above.
 
 Dependencies are intentionally minimal (`sha2`, `base64`, `hex`, `serde_json`).
 
+## Using it
+
+```rust
+use entviz::render;
+use entviz::characterize::characterize;
+
+let svg = render("550e8400-e29b-41d4-a716-446655440000", 1.0, 12.0, None)?;
+
+let ch = characterize("550e8400-e29b-41d4-a716-446655440000")?;
+assert_eq!(ch.scheme.as_deref(), Some("uuid"));
+assert_eq!(ch.role, Some("identifier"));
+assert_eq!(ch.size_bits, 128);
+```
+
+`characterize` returns the structured [entropy characterization](https://dhh1128.github.io/entviz/integration-guide/#the-characterization-model)
+(the same eight fields are also emitted as `data-*` attributes on the rendered
+SVG). For embedding entviz across all five languages, see the
+[Developer Integration Guide](https://dhh1128.github.io/entviz/integration-guide/).
+
 ## Spec compliance & versioning
 
 The crate version encodes the entviz **spec** level it is compliant with:
