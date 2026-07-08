@@ -125,6 +125,29 @@ fn n(x: f64) -> String {
     s
 }
 
+/// Build the eight spec-v13 characterization `data-*` attributes for the root
+/// `<svg>`. Order + form mirror the reference exactly:
+/// `data-encoding data-scheme data-role data-size-basis data-entropy-type
+/// data-size-bits data-qualifiers data-parts`. `scheme`/`role` emit the EMPTY
+/// string when null; `qualifiers`/`parts` are compact XML-escaped JSON. These
+/// attributes carry no ink (closed profile permits extra data-*), so the raster
+/// is unaffected.
+fn characterization_attrs(c: &crate::characterize::Characterization) -> String {
+    format!(
+        " data-encoding=\"{enc}\" data-scheme=\"{scheme}\" data-role=\"{role}\" \
+         data-size-basis=\"{basis}\" data-entropy-type=\"{etype}\" \
+         data-size-bits=\"{bits}\" data-qualifiers=\"{quals}\" data-parts=\"{parts}\"",
+        enc = esc_attr(&c.encoding),
+        scheme = esc_attr(c.scheme.as_deref().unwrap_or("")),
+        role = esc_attr(c.role.unwrap_or("")),
+        basis = c.size_basis,
+        etype = esc_attr(&c.entropy_type),
+        bits = c.size_bits,
+        quals = esc_attr(&c.qualifiers.to_json()),
+        parts = esc_attr(&c.parts_json()),
+    )
+}
+
 /// Render entropy as an entviz SVG string.
 pub fn render(
     entropy_text: &str,
@@ -144,6 +167,11 @@ pub fn render(
     }
 
     let raw_input = entropy_text.trim().to_string();
+    // Structured entropy characterization (spec v13). Reporting-only: emitted as
+    // data-* attributes on the root <svg>; it feeds no pixel, no fingerprint, and
+    // (critically) size_bits is NOT the >512-bit truncation basis — truncation
+    // stays keyed off the tokenizer byte-length test below.
+    let characterization = crate::characterize::characterize(&raw_input)?;
     let parsed = entropy::parse(&raw_input)?;
 
     let (core, mut type_name, alphabet, prefix, suffix, prefix_semantic);
@@ -272,7 +300,7 @@ pub fn render(
         "<svg width=\"{w}\" height=\"{h}\" viewBox=\"0 0 {w} {h}\" xmlns=\"http://www.w3.org/2000/svg\" \
          font-family=\"{ff}\" \
          data-entviz-version=\"{ev}\" data-entviz-lib=\"{lib}\" data-input-bytes=\"{ib}\" \
-         data-cols=\"{c}\" data-rows=\"{r}\"{trunc}>",
+         data-cols=\"{c}\" data-rows=\"{r}\"{trunc}{chr}>",
         ff = esc_attr(MONOSPACE_FONT_FAMILY),
         ev = crate::SPEC_VERSION,
         lib = env!("CARGO_PKG_VERSION"),
@@ -282,6 +310,7 @@ pub fn render(
         c = grid.cols,
         r = grid.rows,
         trunc = if is_truncated { " data-truncated=\"true\"" } else { "" },
+        chr = characterization_attrs(&characterization),
     ));
 
     // defs + clipPath

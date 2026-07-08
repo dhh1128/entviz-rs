@@ -1,13 +1,13 @@
 [package]
 name = "entviz"
-version = "0.12.0"
+version = "0.13.0"
 edition = "2021"
 # Minimum supported Rust version. Floor is set by the highest-versioned stable
 # stdlib item used: usize::is_multiple_of (src/entropy.rs), stabilized in Rust
 # 1.87.0. (Other version-sensitive uses are lower: f64::round_ties_even is 1.77,
 # usize::div_ceil is 1.73.) Verified by `cargo clippy` with clippy::incompatible_msrv.
 rust-version = "1.87"
-description = "Visualize high-entropy values as comparable SVG diagrams (entviz, spec v12)."
+description = "Visualize high-entropy values as comparable SVG diagrams (entviz, spec v13)."
 license = "Apache-2.0"
 repository = "https://github.com/dhh1128/entviz-rs"
 keywords = ["entropy", "fingerprint", "svg", "visualization"]

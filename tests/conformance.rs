@@ -59,6 +59,16 @@ fn attr_first<'a>(svg: &'a str, name: &str) -> Option<&'a str> {
     Some(&svg[start..end])
 }
 
+/// Reverse the renderer's XML attribute escaping (`esc_attr`): `&amp; &lt;
+/// &gt; &quot;` back to their literals. `&amp;` is applied LAST so a literal
+/// like `&lt;` in the source round-trips correctly.
+fn xml_unescape(s: &str) -> String {
+    s.replace("&quot;", "\"")
+        .replace("&gt;", ">")
+        .replace("&lt;", "<")
+        .replace("&amp;", "&")
+}
+
 /// For every element carrying `data-cell-index="N"`, capture the value of
 /// `attr` on that same element (attributes are emitted contiguously, so we read
 /// forward only to the element's closing `>`). Returns a map index -> value.
@@ -207,6 +217,77 @@ fn assert_model_match(vid: &str, svg: &str, model: &Value, failures: &mut Vec<St
         }
     }
 
+    // --- entropy characterization (spec v13): the eight structured fields ---
+    // The renderer emits them as data-* attributes on the root <svg>; recover
+    // them and compare strictly, per field, against the golden model.json.
+    // scheme/role are the EMPTY string in the SVG when null; the model carries
+    // JSON null. qualifiers/parts are compact JSON in both places.
+    let scheme_svg = attr_first(svg, "data-scheme").unwrap_or("<missing>");
+    let scheme_want = model["scheme"].as_str().unwrap_or("");
+    if scheme_svg != scheme_want {
+        bad(format!(
+            "data-scheme={scheme_svg:?} but model scheme={scheme_want:?}"
+        ));
+    }
+    let role_svg = attr_first(svg, "data-role").unwrap_or("<missing>");
+    let role_want = model["role"].as_str().unwrap_or("");
+    if role_svg != role_want {
+        bad(format!(
+            "data-role={role_svg:?} but model role={role_want:?}"
+        ));
+    }
+    for (attr, key) in [
+        ("data-encoding", "encoding"),
+        ("data-size-basis", "size_basis"),
+        ("data-entropy-type", "entropy_type"),
+    ] {
+        let got = attr_first(svg, attr).unwrap_or("<missing>");
+        let want = model[key].as_str().unwrap_or("<null>");
+        if got != want {
+            bad(format!("{attr}={got:?} but model {key}={want:?}"));
+        }
+    }
+    {
+        let got = attr_first(svg, "data-size-bits").unwrap_or("<missing>");
+        let want = model["size_bits"].as_u64().map(|v| v.to_string());
+        if Some(got.to_string()) != want {
+            bad(format!(
+                "data-size-bits={got:?} but model size_bits={want:?}"
+            ));
+        }
+    }
+    // qualifiers / parts: the SVG attribute is XML-escaped compact JSON; the
+    // model holds the equivalent JSON. Compare structurally (order-preserving
+    // for qualifiers, since insertion order is part of the reference contract).
+    {
+        let got_raw = attr_first(svg, "data-qualifiers").unwrap_or("");
+        let got = xml_unescape(got_raw);
+        let got_json: Value = serde_json::from_str(&got)
+            .unwrap_or_else(|e| panic!("{vid}: data-qualifiers not JSON ({e}): {got:?}"));
+        let want_json = &model["qualifiers"];
+        if &got_json != want_json {
+            bad(format!("data-qualifiers {got_json} != model {want_json}"));
+        }
+        // NOTE: we compare JSON VALUE equality (order-insensitive). The
+        // reference SVG's data-qualifiers preserves the recognizer's insertion
+        // order (e.g. cid: `version,codec,hash`), which the Rust port also
+        // emits — verified against the reference goldens. We deliberately do
+        // NOT assert against the model.json key order here: model.json is a
+        // pretty-printed artifact serialized with SORTED keys, so its object
+        // key order is not the normative transport order and would spuriously
+        // disagree with both the reference and this port's SVG.
+    }
+    {
+        let got_raw = attr_first(svg, "data-parts").unwrap_or("");
+        let got = xml_unescape(got_raw);
+        let got_json: Value = serde_json::from_str(&got)
+            .unwrap_or_else(|e| panic!("{vid}: data-parts not JSON ({e}): {got:?}"));
+        let want_json = &model["parts"];
+        if &got_json != want_json {
+            bad(format!("data-parts {got_json} != model {want_json}"));
+        }
+    }
+
     // --- ellipse (when the model emits one) ---
     if model["ellipse"].is_object() {
         let e = &model["ellipse"];
@@ -295,19 +376,42 @@ fn corpus_render_and_error_contract() {
     );
 }
 
-/// Erase the one attribute that legitimately differs between members of an
-/// invariant pair: `data-input-bytes` reflects the raw input length (e.g. a
-/// dashed UUID is 36 chars, undashed 32), while everything else — the entire
-/// visualization — must be identical. Mirrors the Python runner, which diffs
-/// the render models with `input_bytes` excluded.
-fn strip_input_bytes(svg: &str) -> String {
-    let needle = "data-input-bytes=\"";
-    if let Some(start) = svg.find(needle) {
-        let vstart = start + needle.len();
-        let vend = vstart + svg[vstart..].find('"').unwrap() + 1;
-        return format!("{}{}", &svg[..start], &svg[vend..]);
+/// Erase the attributes that legitimately differ between members of an
+/// invariant pair before diffing. `data-input-bytes` reflects the raw input
+/// length (a dashed UUID is 36 chars, undashed 32). The eight spec-v13
+/// characterization attributes are ALSO excluded here — mirroring the Python
+/// runner, which diffs the render models with the characterization keys +
+/// `input_bytes` removed — because they are derived from the raw input's
+/// presentation (e.g. `data-parts` text / `data-size-bits`) and so can differ
+/// across an equivalence pair even when the entire *visualization* is
+/// identical. Everything else must match byte-for-byte.
+fn strip_variable_attrs(svg: &str) -> String {
+    let mut out = svg.to_string();
+    for needle in [
+        "data-input-bytes=\"",
+        "data-encoding=\"",
+        "data-scheme=\"",
+        "data-role=\"",
+        "data-size-basis=\"",
+        "data-entropy-type=\"",
+        "data-size-bits=\"",
+        "data-qualifiers=\"",
+        "data-parts=\"",
+    ] {
+        // strip every occurrence, including a leading space if present.
+        while let Some(start) = out.find(needle) {
+            let vstart = start + needle.len();
+            let vend = vstart + out[vstart..].find('"').unwrap() + 1;
+            // absorb one leading space so we don't leave a double space.
+            let cut_start = if start > 0 && out.as_bytes()[start - 1] == b' ' {
+                start - 1
+            } else {
+                start
+            };
+            out = format!("{}{}", &out[..cut_start], &out[vend..]);
+        }
     }
-    svg.to_string()
+    out
 }
 
 #[test]
@@ -334,7 +438,7 @@ fn corpus_invariant_pairs_render_identically() {
         let b = pair[1].as_str().unwrap();
         match (render_vector(&dir, a), render_vector(&dir, b)) {
             (Ok(sa), Ok(sb)) => {
-                if strip_input_bytes(&sa) != strip_input_bytes(&sb) {
+                if strip_variable_attrs(&sa) != strip_variable_attrs(&sb) {
                     failures.push(format!("{a} != {b}: invariant pair rendered differently"));
                 }
             }
