@@ -14,6 +14,9 @@ use crate::{
 };
 
 const DPI: f64 = 96.0;
+// Transparent quiet-margin ring (user units) on all four sides of the canvas so
+// the gray frame never sits on the canvas edge (issue #31, spec v12).
+const MARGIN: f64 = 1.0;
 const NOTE_MAX_LEN: usize = 10;
 const MAX_INPUT_CHARS: usize = 65536;
 const MONOSPACE_FONT_FAMILY: &str = "\"JetBrains Mono\", \"Menlo\", \"Consolas\", \"DejaVu Sans Mono\", \"Liberation Mono\", \"Roboto Mono\", \"Noto Sans Mono\", monospace";
@@ -211,13 +214,15 @@ pub fn render(
     let grid_w = cell_w * grid.cols as f64;
     let grid_h = cell_h * grid.rows as f64;
 
-    let bounding_w = 1.0 + bar_w + 1.0 + gm + grid_w + gm + 1.0;
+    let inner_w = 1.0 + bar_w + 1.0 + gm + grid_w + gm + 1.0;
     let has_bottom_label = suffix.is_some() || note.is_some();
     let bottom_region = if has_bottom_label { nucleus_h + gm } else { gm };
-    let bounding_h = 1.0 + gm + nucleus_h + grid_h + bottom_region + 1.0;
+    let inner_h = 1.0 + gm + nucleus_h + grid_h + bottom_region + 1.0;
+    let bounding_w = inner_w + 2.0 * MARGIN;
+    let bounding_h = inner_h + 2.0 * MARGIN;
 
-    let grid_left = 1.0 + bar_w + 1.0 + gm;
-    let grid_top = 1.0 + gm + nucleus_h;
+    let grid_left = MARGIN + 1.0 + bar_w + 1.0 + gm;
+    let grid_top = MARGIN + 1.0 + gm + nucleus_h;
     let grid_right = grid_left + grid_w;
     let grid_bottom = grid_top + grid_h;
 
@@ -291,11 +296,14 @@ pub fn render(
         h = n(grid_h),
     ));
 
-    // bounding white background
+    // bounding white background — fill only the inner field, leaving the
+    // MARGIN quiet ring transparent (issue #31, spec v12).
     s.push_str(&format!(
-        "<rect x=\"0\" y=\"0\" width=\"{}\" height=\"{}\" fill=\"#ffffff\"/>",
-        n(bounding_w),
-        n(bounding_h)
+        "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"#ffffff\"/>",
+        n(MARGIN),
+        n(MARGIN),
+        n(bounding_w - 2.0 * MARGIN),
+        n(bounding_h - 2.0 * MARGIN)
     ));
 
     // grid channel
@@ -629,16 +637,42 @@ pub fn render(
             n(x1), n(y1), n(x2), n(y2)
         ));
     };
-    bl(&mut s, 0.0, 0.5, bounding_w, 0.5);
-    bl(&mut s, bounding_w - 0.5, 0.0, bounding_w - 0.5, bounding_h);
-    bl(&mut s, 0.0, bounding_h - 0.5, bounding_w, bounding_h - 0.5);
-    bl(&mut s, 0.5, 0.0, 0.5, bounding_h);
+    // Frame inset by MARGIN; span endpoints MARGIN..(bounding-MARGIN) so corners
+    // stay double-painted (issue #31, spec v12).
     bl(
         &mut s,
-        1.0 + bar_w + 0.5,
-        0.0,
-        1.0 + bar_w + 0.5,
-        bounding_h,
+        MARGIN,
+        MARGIN + 0.5,
+        bounding_w - MARGIN,
+        MARGIN + 0.5,
+    );
+    bl(
+        &mut s,
+        bounding_w - MARGIN - 0.5,
+        MARGIN,
+        bounding_w - MARGIN - 0.5,
+        bounding_h - MARGIN,
+    );
+    bl(
+        &mut s,
+        MARGIN,
+        bounding_h - MARGIN - 0.5,
+        bounding_w - MARGIN,
+        bounding_h - MARGIN - 0.5,
+    );
+    bl(
+        &mut s,
+        MARGIN + 0.5,
+        MARGIN,
+        MARGIN + 0.5,
+        bounding_h - MARGIN,
+    );
+    bl(
+        &mut s,
+        MARGIN + 1.0 + bar_w + 0.5,
+        MARGIN,
+        MARGIN + 1.0 + bar_w + 0.5,
+        bounding_h - MARGIN,
     );
 
     s.push_str("</svg>");
@@ -825,9 +859,9 @@ fn draw_color_bar(
     bounding_h: f64,
     cell_text_px: f64,
 ) {
-    let bar_left = 1.0;
-    let bar_top = 1.0;
-    let bar_height = bounding_h - 2.0;
+    let bar_left = MARGIN + 1.0;
+    let bar_top = MARGIN + 1.0;
+    let bar_height = bounding_h - 2.0 * MARGIN - 2.0;
     let counts = two_bit_counts(digest);
     // usage[edge_colors[i]] = counts[i]
     let edge = &style.edge_colors;
