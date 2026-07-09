@@ -555,4 +555,306 @@ mod tests {
     fn empty_qualifiers_serialize_as_object() {
         assert_eq!(Qualifiers::default().to_json(), "{}");
     }
+
+    // ==================================================================
+    // Coverage completion (spec v13): exercise every reachable scheme arm,
+    // both size_basis branches, both integer-decode paths, all bind modes,
+    // and the JSON escape ladder — WITHOUT the reference corpus (these run
+    // in CI's coverage job where ../entviz is intentionally absent).
+    // ==================================================================
+
+    // ---- json_string escape ladder (chars.rs 118-122) ----
+    #[test]
+    fn json_string_escapes_quote_backslash_and_controls() {
+        // A qualifier value carrying every escape class the encoder handles.
+        let mut q = Qualifiers::default();
+        q.push_str("k", "a\"b\\c\nd\re\tf\u{0001}g");
+        // \u{0001} is a C0 control -> ; the named escapes cover the rest.
+        assert_eq!(q.to_json(), "{\"k\":\"a\\\"b\\\\c\\nd\\re\\tf\\u0001g\"}");
+    }
+
+    // ---- CESR signature role (line 196) ----
+    #[test]
+    fn cesr_signature_code_is_signature_role() {
+        // "0B" (Ed25519 sig, 88 chars) -> type_name "CESR Ed25519 sig",
+        // whose lowercase contains "sig" -> ROLE_SIGNATURE.
+        let input = format!("0B{}", "A".repeat(86));
+        let c = ch(&input);
+        assert_eq!(c.scheme.as_deref(), Some("cesr"));
+        assert_eq!(c.role, Some(ROLE_SIGNATURE));
+        assert_eq!(c.qualifiers.to_json(), "{\"algorithm\":\"Ed25519 sig\"}");
+    }
+
+    // ---- SSH bare key (SSH key -> role key, no algorithm qualifier) ----
+    #[test]
+    fn ssh_bare_key_is_key_without_algorithm_qualifier() {
+        // "AAAA..."-prefixed base64 blob with no recognized key-type header
+        // parses as "SSH key" (length dodges every CESR code): the type_name
+        // strips to "key", so the `rest == "key"` branch pushes no algorithm.
+        let c = ch("AAAAXabcd1234");
+        assert_eq!(c.scheme.as_deref(), Some("ssh"));
+        assert_eq!(c.role, Some(ROLE_KEY));
+        assert_eq!(c.qualifiers.to_json(), "{}");
+    }
+
+    // ---- gitoid (fold prefix, digest, decoded, qualifiers, size_bits 256) ----
+    #[test]
+    fn gitoid_blob_sha256_is_digest_decoded_256() {
+        let c = ch(
+            "gitoid:blob:sha256:473a0f4c3be8a93681a267e3b1e9a7dcda1185436fe141f7749120a303721813",
+        );
+        assert_eq!(c.scheme.as_deref(), Some("gitoid"));
+        assert_eq!(c.role, Some(ROLE_DIGEST));
+        assert_eq!(c.size_basis, "decoded");
+        assert_eq!(c.size_bits, 256); // 64 hex chars * 4 bits / 8 * 8
+        assert_eq!(
+            c.qualifiers.to_json(),
+            "{\"object\":\"blob\",\"algorithm\":\"sha256\"}"
+        );
+        assert_eq!(c.parts[0].bind, "fold");
+        assert_eq!(c.parts[1].bind, "core");
+    }
+
+    // ---- swhid (fold prefix, digest, sha1 qualifier) (line 253) ----
+    #[test]
+    fn swhid_is_digest_with_object_and_sha1() {
+        let c = ch("swh:1:rev:309cf2674ee7a0749978cf8265ab91a60aea0f7d");
+        assert_eq!(c.scheme.as_deref(), Some("swhid"));
+        assert_eq!(c.role, Some(ROLE_DIGEST));
+        assert_eq!(c.size_basis, "decoded");
+        assert_eq!(
+            c.qualifiers.to_json(),
+            "{\"object\":\"rev\",\"algorithm\":\"sha1\"}"
+        );
+        assert_eq!(c.parts[0].bind, "fold");
+    }
+
+    // ---- BTC legacy address (network + variant, base58 integer-decode) ----
+    #[test]
+    fn btc_legacy_is_address_mainnet_legacy() {
+        let input = format!("1{}", "a".repeat(33));
+        let c = ch(&input);
+        assert_eq!(c.scheme.as_deref(), Some("btc"));
+        assert_eq!(c.role, Some(ROLE_ADDRESS));
+        assert_eq!(c.encoding, "base58");
+        assert_eq!(c.size_basis, "decoded");
+        assert_eq!(
+            c.qualifiers.to_json(),
+            "{\"network\":\"mainnet\",\"variant\":\"legacy\"}"
+        );
+    }
+
+    // ---- BTC segwit variant branch ----
+    #[test]
+    fn btc_segwit_is_address_segwit() {
+        let input = format!("bc1{}", "q".repeat(39));
+        let c = ch(&input);
+        assert_eq!(c.scheme.as_deref(), Some("btc"));
+        assert_eq!(
+            c.qualifiers.to_json(),
+            "{\"network\":\"mainnet\",\"variant\":\"segwit\"}"
+        );
+    }
+
+    // ---- BCH mainnet + testnet branches (lines 282-288) ----
+    #[test]
+    fn bch_mainnet_and_testnet() {
+        let m = ch("bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a");
+        assert_eq!(m.scheme.as_deref(), Some("bch"));
+        assert_eq!(m.role, Some(ROLE_ADDRESS));
+        assert_eq!(m.qualifiers.to_json(), "{\"network\":\"mainnet\"}");
+
+        let t = ch(&format!("bchtest:q{}", "q".repeat(41)));
+        assert_eq!(t.scheme.as_deref(), Some("bch"));
+        assert_eq!(t.qualifiers.to_json(), "{\"network\":\"testnet\"}");
+    }
+
+    // ---- LTC legacy variant branch (lines 289-294) ----
+    #[test]
+    fn ltc_legacy_is_address_with_legacy_variant() {
+        let input = format!("L{}", "a".repeat(33));
+        let c = ch(&input);
+        assert_eq!(c.scheme.as_deref(), Some("ltc"));
+        assert_eq!(c.role, Some(ROLE_ADDRESS));
+        assert_eq!(
+            c.qualifiers.to_json(),
+            "{\"network\":\"mainnet\",\"variant\":\"legacy\"}"
+        );
+    }
+
+    // ---- LTC bech32 (no legacy variant; network only) ----
+    #[test]
+    fn ltc_bech32_is_address_no_variant() {
+        let c = ch("ltc1qhw6dgkk52v9eqzukju7vrqpw0jt4wll6e6n4q5");
+        assert_eq!(c.scheme.as_deref(), Some("ltc"));
+        assert_eq!(c.qualifiers.to_json(), "{\"network\":\"mainnet\"}");
+    }
+
+    // ---- ETH (line 304-305): no qualifiers, address, decoded ----
+    #[test]
+    fn eth_is_address_no_qualifiers() {
+        let c = ch("0x742d35cc6634c0532925a3b844bc454e4438f44e");
+        assert_eq!(c.scheme.as_deref(), Some("eth"));
+        assert_eq!(c.role, Some(ROLE_ADDRESS));
+        assert_eq!(c.qualifiers.to_json(), "{}");
+        assert_eq!(c.entropy_type, "eth");
+    }
+
+    // ---- XLM plain + muxed variant (lines 307-312) ----
+    #[test]
+    fn stellar_plain_and_muxed() {
+        let g = ch("GCKFBEIYTKP5RDBQMUTAPDCDHF2TR4LPNRGW4JBQQTQUYZP4LDKP3SGM");
+        assert_eq!(g.scheme.as_deref(), Some("stellar"));
+        assert_eq!(g.role, Some(ROLE_ADDRESS));
+        assert_eq!(g.qualifiers.to_json(), "{}");
+
+        let m = ch("MA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVAAAAAAAAAAAAAJLK");
+        assert_eq!(m.scheme.as_deref(), Some("stellar"));
+        assert_eq!(m.qualifiers.to_json(), "{\"variant\":\"muxed\"}");
+    }
+
+    // ---- XRP (line 313-314) ----
+    #[test]
+    fn xrp_is_address() {
+        let c = ch("rUocf1ixKzTuEe34kmVhRvGqNCofY1NJzV");
+        assert_eq!(c.scheme.as_deref(), Some("xrp"));
+        assert_eq!(c.role, Some(ROLE_ADDRESS));
+        assert_eq!(c.qualifiers.to_json(), "{}");
+    }
+
+    // ---- EOS (line 316-317) ----
+    #[test]
+    fn eos_is_address() {
+        let c = ch("eosaccount1");
+        assert_eq!(c.scheme.as_deref(), Some("eos"));
+        assert_eq!(c.role, Some(ROLE_ADDRESS));
+        assert_eq!(c.qualifiers.to_json(), "{}");
+    }
+
+    // ---- generic bech32 with hrp qualifier (lines 319-325) ----
+    #[test]
+    fn generic_bech32_recovers_hrp() {
+        let c = ch("cosmos1qqqsyqcyq5rqwzqfpg9scrgwpugpzysnrk363e");
+        assert_eq!(c.scheme.as_deref(), Some("bech32"));
+        assert_eq!(c.role, Some(ROLE_ADDRESS));
+        assert_eq!(c.qualifiers.to_json(), "{\"hrp\":\"cosmos\"}");
+    }
+
+    // ---- CIDv0 branch (lines 330-333): version 0, dag-pb, sha2-256 ----
+    #[test]
+    fn cid_v0_is_identifier_with_fixed_qualifiers() {
+        let c = ch("QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG");
+        assert_eq!(c.scheme.as_deref(), Some("cid"));
+        assert_eq!(c.role, Some(ROLE_IDENTIFIER));
+        assert_eq!(
+            c.qualifiers.to_json(),
+            "{\"version\":0,\"codec\":\"dag-pb\",\"hash\":\"sha2-256\"}"
+        );
+    }
+
+    // ---- CIDv1 with an explicit codec/hash split (lines 338-340) ----
+    #[test]
+    fn cid_v1_codec_slash_hash_split() {
+        // "bafkrei..." decodes to codec=raw, hash=sha2-256 -> label "CIDv1 raw"
+        // (single token, no '/'), exercising the else branch (codec-only,
+        // default hash sha2-256) at lines 341-343.
+        let c = ch("bafkreigh2akiscaildcqabsyg3dfr6chu3fgpregiymsck7e7aqa4s52zy");
+        assert_eq!(c.scheme.as_deref(), Some("cid"));
+        assert_eq!(
+            c.qualifiers.to_json(),
+            "{\"version\":1,\"codec\":\"raw\",\"hash\":\"sha2-256\"}"
+        );
+    }
+
+    // ---- ULID (line 354-355) ----
+    #[test]
+    fn ulid_is_identifier() {
+        let c = ch("01ARZ3NDEKTSV4RRFFQ69G5FAV");
+        assert_eq!(c.scheme.as_deref(), Some("ulid"));
+        assert_eq!(c.role, Some(ROLE_IDENTIFIER));
+    }
+
+    // ---- UUID (line 351-352) ----
+    #[test]
+    fn uuid_is_identifier_decoded() {
+        let c = ch("550e8400-e29b-41d4-a716-446655440000");
+        assert_eq!(c.scheme.as_deref(), Some("uuid"));
+        assert_eq!(c.role, Some(ROLE_IDENTIFIER));
+        assert_eq!(c.size_basis, "decoded");
+    }
+
+    // ---- LEI (line 357-358) ----
+    #[test]
+    fn lei_is_identifier() {
+        let c = ch("5493001KJTIIGC8Y1R12");
+        assert_eq!(c.scheme.as_deref(), Some("lei"));
+        assert_eq!(c.role, Some(ROLE_IDENTIFIER));
+    }
+
+    // ---- base36 integer-decode path + char-not-found fallback (151-153) ----
+    // A base36 core containing a character outside its alphabet's index that
+    // still reaches decoded_bytes_integer via the case-tolerant lookup, plus
+    // the all-zero core returning a single byte (line 161).
+    #[test]
+    fn integer_decode_zero_core_is_one_byte() {
+        // decimal "0" -> value 0 -> minimal byte length 1 -> 8 bits.
+        // Snowflake requires 17-19 digits, so use the parser-agnostic helper
+        // directly for the zero/empty edge; and a real decimal id for the path.
+        assert_eq!(decoded_bytes_integer("0", &entropy::DECIMAL), 1);
+        assert_eq!(decoded_bytes_integer("", &entropy::DECIMAL), 1);
+        // base36's alphabet is UPPERCASE ("0-9A-Z"); a lowercase letter misses
+        // the primary `chars.find` and resolves through the lowercase fallback
+        // (line 152 Some branch). "1a" -> 1*36 + 10 = 46 -> 1 byte.
+        assert_eq!(decoded_bytes_integer("1a", &entropy::BASE36), 1);
+        // A character in NEITHER case maps to 0 (line 153): "#" is treated as
+        // digit 0, so "10" and "#0" decode identically (36 -> 1 byte).
+        assert_eq!(decoded_bytes_integer("#0", &entropy::BASE36), 1);
+    }
+
+    // ---- bare-encoding fallback (line 373): scheme None, entropy_type == encoding ----
+    #[test]
+    fn bare_hex_falls_through_to_none_scheme() {
+        // 64 hex chars: recognized as hex encoding but no scheme fires.
+        let c = ch("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde0");
+        assert!(c.scheme.is_none());
+        assert!(c.role.is_none());
+        assert_eq!(c.size_basis, "decoded");
+        assert_eq!(c.encoding, "hex");
+        assert_eq!(c.entropy_type, c.encoding); // scheme ?? encoding
+    }
+
+    // ---- did with a plain method (did:web) exercises the non-ethr branch ----
+    #[test]
+    fn did_web_method_no_network_qualifier() {
+        let c = ch("did:web:example.com:user:Alice");
+        assert_eq!(c.scheme.as_deref(), Some("did"));
+        assert_eq!(c.role, Some(ROLE_IDENTIFIER));
+        assert_eq!(c.qualifiers.to_json(), "{\"method\":\"web\"}");
+        assert_eq!(c.size_basis, "utf8");
+    }
+
+    // ---- CIDv1 with a non-default hash: the codec/hash "/"-split arm (339-340) ----
+    #[test]
+    fn cid_v1_non_default_hash_splits_codec_and_hash() {
+        // A hand-built CIDv1 (version=1, codec=dag-pb=0x70, hashfn=sha2-512=0x13)
+        // labels as "CIDv1 dag-pb/sha2-512", exercising the split_once('/') arm.
+        let c = ch("bafybgqflvov2xk5lvov2xk5lvov2xk5lvov2xk5lvov2xk5lvov2xk5lvov2xk5lvov2xk5lvov2xk5lvov2xk5lvov2xk5lvov2xk5lvov2w");
+        assert_eq!(c.scheme.as_deref(), Some("cid"));
+        assert_eq!(
+            c.qualifiers.to_json(),
+            "{\"version\":1,\"codec\":\"dag-pb\",\"hash\":\"sha2-512\"}"
+        );
+    }
+
+    // ---- bare CIDv1 (undecodable multicodec): the `rest.is_empty()` arm (345) ----
+    #[test]
+    fn cid_v1_undecodable_has_only_version_qualifier() {
+        // A valid-length/charset 'b...' CID whose leading uvarint version != 1,
+        // so `b32_decode_multicodec` fails and the parser label stays bare
+        // "CIDv1" -> `rest` is empty -> only the version qualifier is emitted.
+        let c = ch("bajkrftonzxg43tonzxg43tonzxg43tonzxg43tonzxg43tonzxg43tonzxg43ti");
+        assert_eq!(c.scheme.as_deref(), Some("cid"));
+        assert_eq!(c.role, Some(ROLE_IDENTIFIER));
+        assert_eq!(c.qualifiers.to_json(), "{\"version\":1}");
+    }
 }
