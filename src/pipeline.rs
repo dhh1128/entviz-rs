@@ -36,12 +36,23 @@ pub enum RenderError {
     Eip55 {
         position: usize,
     },
+    /// A bound checksum was surfaced (base58check / bech32 / CashAddr / LEI) but
+    /// did not verify (spec v14). The variant identifies which scheme's checksum
+    /// failed; the input is rejected rather than rendered with a bad checksum.
+    Base58Check,
+    Bech32Checksum,
+    CashAddrChecksum,
+    LeiChecksum,
 }
 
 impl From<ParseError> for RenderError {
     fn from(e: ParseError) -> Self {
         match e {
             ParseError::Eip55 { position } => RenderError::Eip55 { position },
+            ParseError::Base58Check => RenderError::Base58Check,
+            ParseError::Bech32Checksum => RenderError::Bech32Checksum,
+            ParseError::CashAddrChecksum => RenderError::CashAddrChecksum,
+            ParseError::LeiChecksum => RenderError::LeiChecksum,
         }
     }
 }
@@ -57,6 +68,10 @@ impl std::fmt::Display for RenderError {
             RenderError::Eip55 { position } => {
                 write!(f, "EIP-55 checksum mismatch at position {position}")
             }
+            RenderError::Base58Check => write!(f, "base58check checksum mismatch"),
+            RenderError::Bech32Checksum => write!(f, "bech32 checksum mismatch"),
+            RenderError::CashAddrChecksum => write!(f, "CashAddr checksum mismatch"),
+            RenderError::LeiChecksum => write!(f, "LEI MOD 97-10 checksum mismatch"),
         }
     }
 }
@@ -174,12 +189,15 @@ pub fn render(
     let characterization = crate::characterize::characterize(&raw_input)?;
     let parsed = entropy::parse(&raw_input)?;
 
-    let (core, mut type_name, alphabet, prefix, suffix, prefix_semantic);
+    // v14: the visible label is a projection of the characterization
+    // (render_label), so the parser's `type_name` no longer feeds the label and
+    // is not retained here. `prefix`/`suffix`/`prefix_semantic` still drive the
+    // fingerprint-fold and the bottom-strip suffix.
+    let (core, alphabet, prefix, suffix, prefix_semantic);
     match parsed {
         None => {
             // txt -> b64url fallback (URL-safe base64, no padding).
             core = b64url_encode(raw_input.as_bytes());
-            type_name = format!("txt({})->b64url", raw_input.chars().count());
             alphabet = BASE64URL;
             prefix = None;
             suffix = None;
@@ -187,18 +205,10 @@ pub fn render(
         }
         Some(p) => {
             core = p.core;
-            type_name = p.type_name;
             alphabet = p.alphabet;
             prefix = p.prefix;
             suffix = p.suffix;
             prefix_semantic = p.prefix_semantic;
-            if type_name == "hex" {
-                type_name = format!("hex({})", core.chars().count());
-            } else if type_name == "base64" {
-                type_name = format!("b64({})", core.chars().count());
-            } else if type_name == "base64url" {
-                type_name = format!("b64url({})", core.chars().count());
-            }
         }
     }
 
@@ -643,7 +653,19 @@ pub fn render(
         cell_text_px,
     );
 
-    // labels
+    // labels — v14: the visible top/bottom strips are a pure projection of the
+    // v13 entropy characterization through one grammar (render_label), NOT the
+    // old per-parser type_name/prefix fusing. `characterization` is the same
+    // record already emitted as data-* attributes above; the styled
+    // `fingerprint of ` marker and the note tspan are applied structurally in
+    // draw_label_strips from the truncated/note flags. See docs/spec.md ->
+    // "Label strips" and reviews/v14-label-redesign.md.
+    let (top_text, _bottom_text) = crate::characterize::render_label(
+        &characterization,
+        is_truncated,
+        suffix.as_deref(),
+        note.as_deref(),
+    );
     draw_label_strips(
         &mut s,
         grid_left,
@@ -651,8 +673,7 @@ pub fn render(
         grid_top,
         grid_bottom,
         nucleus_h,
-        &type_name,
-        &prefix,
+        &top_text,
         &suffix,
         label_text_px,
         truncated_bytes,
@@ -1025,8 +1046,7 @@ fn draw_label_strips(
     grid_top: f64,
     grid_bottom: f64,
     nucleus_h: f64,
-    type_name: &str,
-    prefix: &Option<String>,
+    top_text: &str,
     suffix: &Option<String>,
     text_px: f64,
     truncated_bytes: Option<usize>,
@@ -1035,34 +1055,36 @@ fn draw_label_strips(
     // font-family is inherited from the root <svg>; each label <text> carries
     // only a compact font-size presentation attribute.
     let font_size_attr = format!("font-size=\"{}\"", n(text_px));
-    let rest_text = if !type_name.is_empty() {
-        let mut t = format!("{}:", type_name);
-        if let Some(p) = prefix {
-            t.push_str(&format!(" {}...", p));
-        }
-        t
-    } else if let Some(p) = prefix {
-        format!("{}...", p)
-    } else {
-        String::new()
-    };
     let top_cy = grid_top - nucleus_h / 2.0;
     s.push_str("<g data-channel=\"label-top\">");
+    // v14: `top_text` is the render_label projection. When truncated it begins
+    // with the loud `fingerprint of ` marker, which is split back out here and
+    // rendered bold dark-red, with the projected label following in #666.
     if truncated_bytes.is_some() {
-        s.push_str(&format!(
-            "<text x=\"{}\" y=\"{}\" fill=\"#666666\" {} dominant-baseline=\"central\"><tspan fill=\"#a00000\" font-weight=\"bold\">fingerprint of </tspan>{}</text>",
-            n(grid_left),
-            n(top_cy),
-            font_size_attr,
-            esc_text(&rest_text),
-        ));
+        if let Some(rest) = top_text.strip_prefix(crate::characterize::TRUNC_MARKER) {
+            s.push_str(&format!(
+                "<text x=\"{}\" y=\"{}\" fill=\"#666666\" {} dominant-baseline=\"central\"><tspan fill=\"#a00000\" font-weight=\"bold\">fingerprint of </tspan>{}</text>",
+                n(grid_left),
+                n(top_cy),
+                font_size_attr,
+                esc_text(rest),
+            ));
+        } else {
+            s.push_str(&format!(
+                "<text x=\"{}\" y=\"{}\" fill=\"#666666\" {} dominant-baseline=\"central\">{}</text>",
+                n(grid_left),
+                n(top_cy),
+                font_size_attr,
+                esc_text(top_text),
+            ));
+        }
     } else {
         s.push_str(&format!(
             "<text x=\"{}\" y=\"{}\" fill=\"#666666\" {} dominant-baseline=\"central\">{}</text>",
             n(grid_left),
             n(top_cy),
             font_size_attr,
-            esc_text(&rest_text),
+            esc_text(top_text),
         ));
     }
     s.push_str("</g>");
@@ -1543,45 +1565,49 @@ mod tests {
 
     #[test]
     fn render_b64url_detected_label() {
-        // '-' and '_' force base64url detection -> "b64url(N)" type label.
+        // v14: '-'/'_' force base64url; scheme=null projects to the encoding
+        // short-name `b64url` plus a decoded SIZE. 8 chars * 6 bits = 48 bits.
         let svg = render("ABC-_DEF", 1.0, 12.0, None).unwrap();
-        assert!(svg.contains("b64url("));
+        assert!(svg.contains(">b64url, 48-bit</text>"), "svg: {svg}");
     }
 
     #[test]
     fn render_b64_detected_label() {
-        // '+' / '/' force plain base64 detection -> "b64(N)" type label.
+        // v14: '+'/'/' force plain base64 -> PRIMARY `b64`, decoded 48-bit.
         let svg = render("ABC+/DEF", 1.0, 12.0, None).unwrap();
-        assert!(svg.contains("b64("));
+        assert!(svg.contains(">b64, 48-bit</text>"), "svg: {svg}");
     }
 
     #[test]
     fn render_type_with_prefix_label() {
-        // 0x-prefixed hex carries BOTH a type name and a prefix -> the
-        // "type: prefix..." top-label branch.
+        // v14: bare 0x-prefixed short hex is scheme=null -> `hex, <bits>`; the
+        // presentation prefix no longer appears in the projected label.
         let svg = render("0xabcdef12", 1.0, 12.0, None).unwrap();
-        assert!(svg.contains("hex("));
-        assert!(svg.contains("0x..."));
+        assert!(svg.contains(">hex, 32-bit</text>"), "svg: {svg}");
+        assert!(!svg.contains("0x..."));
     }
 
     #[test]
     fn render_suffix_only_bottom_label() {
-        // LEI has a suffix but no note -> the (suffix, None) bottom branch.
+        // LEI has a suffix but no note -> the (suffix, None) bottom branch, and
+        // v14 projects the top to the bare scheme short-name `LEI`.
         let svg = render("5493001KJTIIGC8Y1R12", 1.0, 12.0, None).unwrap();
         assert!(svg.contains("...12"));
+        assert!(svg.contains(">LEI</text>"), "svg: {svg}");
         assert!(!svg.contains("data-user-note"));
     }
 
     #[test]
     fn render_text_fallback_label() {
-        // plain text -> txt(N)->b64url label.
+        // v14: plain text -> PRIMARY `text` with a utf8 byte SIZE.
         let svg = render("hello world", 1.0, 12.0, None).unwrap();
-        assert!(svg.contains("txt(") && svg.contains("b64url"));
+        assert!(svg.contains(">text, 11-byte</text>"), "svg: {svg}");
     }
 
     #[test]
     fn render_swhid_semantic_prefix_label() {
-        // type_name is empty for swhid; the label is just the prefix + "...".
+        // v14: swhid projects to the self-describing PRIMARY `swh:1:<object>`,
+        // no body echo and no trailing `...`.
         let svg = render(
             "swh:1:rev:309cf2674ee7a0749978cf8265ab91a60aea0f7d",
             1.0,
@@ -1589,7 +1615,8 @@ mod tests {
             None,
         )
         .unwrap();
-        assert!(svg.contains("swh:1:rev:..."));
+        assert!(svg.contains(">swh:1:rev</text>"), "svg: {svg}");
+        assert!(!svg.contains("swh:1:rev:..."));
     }
 
     #[test]

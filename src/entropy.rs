@@ -93,7 +93,20 @@ impl Parsed {
 
 #[derive(Debug)]
 pub enum ParseError {
+    /// EIP-55 mixed-case Ethereum checksum mismatch (`position` = first bad hex).
     Eip55 { position: usize },
+    /// A base58check body (BTC/LTC legacy) whose 4-byte double-SHA256 checksum
+    /// does not verify. v14: the checksum is surfaced as the bottom-strip
+    /// suffix, so a structural match with a bad checksum REJECTS.
+    Base58Check,
+    /// A bech32 address (BTC segwit `bc1`, LTC `ltc1`, Cardano Shelley, generic
+    /// cosmos) whose BIP-173/BIP-350 polymod does not verify. v14: reject.
+    Bech32Checksum,
+    /// A CashAddr (Bitcoin Cash) whose 40-bit BCH polymod does not verify.
+    CashAddrChecksum,
+    /// A 20-char LEI (with the reserved `00`) whose MOD 97-10 check digits do
+    /// not verify. v14: reject rather than fall through to a bare base36.
+    LeiChecksum,
 }
 
 type PResult = Result<Option<Parsed>, ParseError>;
@@ -352,6 +365,12 @@ fn parse_bitcoin_address(text: &str) -> PResult {
                 let mid: String = bchars[..bchars.len() - 4].iter().collect();
                 let suf: String = bchars[bchars.len() - 4..].iter().collect();
                 if (21..=30).contains(&mid.chars().count()) {
+                    // v14: the 4-byte double-SHA256 checksum is surfaced as the
+                    // suffix, so it MUST verify. A structural match with a bad
+                    // checksum rejects.
+                    if !base58check_ok(text) {
+                        return Err(ParseError::Base58Check);
+                    }
                     return Ok(Some(Parsed::new(
                         "BTC legacy",
                         BASE58,
@@ -366,6 +385,14 @@ fn parse_bitcoin_address(text: &str) -> PResult {
     // SegWit: ^(bc1|tb1) bech32{39,69}$ (case-insensitive)
     if let Some(m) = match_prefix_bech32(text, &["bc1", "tb1"], 39, 69) {
         let (prefix, body) = m;
+        // v14: verify the BIP-173/BIP-350 polymod (the specific parser
+        // previously skipped it). The HRP is "bc"/"tb" (strip the '1' separator).
+        let hrp = prefix.to_lowercase();
+        let hrp = hrp.trim_end_matches('1');
+        match bech32_checksum_const(hrp, &body.to_lowercase()) {
+            Some(c) if c == 1 || c == 0x2bc830a3 => {}
+            _ => return Err(ParseError::Bech32Checksum),
+        }
         return Ok(Some(Parsed::new(
             "BTC SegWit",
             BECH32,
@@ -474,6 +501,11 @@ fn parse_litecoin_address(text: &str) -> PResult {
     for prefix in ["tL", "L"] {
         if let Some(rest) = text.strip_prefix(prefix) {
             if rest.chars().count() == 33 && is_base58(rest) {
+                // v14: Litecoin legacy is base58check; verify the double-SHA256
+                // checksum — a bad checksum rejects.
+                if !base58check_ok(text) {
+                    return Err(ParseError::Base58Check);
+                }
                 return Ok(Some(Parsed::new(
                     "LTC legacy",
                     BASE58,
@@ -486,6 +518,14 @@ fn parse_litecoin_address(text: &str) -> PResult {
     }
     // ltc1 bech32{38,68}
     if let Some((prefix, body)) = match_prefix_bech32(text, &["ltc1"], 38, 68) {
+        // v14: verify the polymod (the specific parser previously skipped it).
+        // The HRP is "ltc" (strip the '1' separator).
+        let hrp = prefix.to_lowercase();
+        let hrp = hrp.trim_end_matches('1');
+        match bech32_checksum_const(hrp, &body.to_lowercase()) {
+            Some(c) if c == 1 || c == 0x2bc830a3 => {}
+            _ => return Err(ParseError::Bech32Checksum),
+        }
         return Ok(Some(Parsed::new(
             "LTC",
             BECH32,
@@ -516,6 +556,17 @@ fn parse_bitcoin_cash_address(text: &str) -> PResult {
             let body: String = rchars[1..].iter().collect();
             if is_bech32_either(&body) {
                 let full_body: String = rest.to_lowercase();
+                // v14: verify the 40-bit CashAddr BCH checksum (a DIFFERENT code
+                // from bech32's polymod). The checksum HRP is the prefix WITHOUT
+                // the colon, defaulting to "bitcoincash" for a bare q…/p… address;
+                // the payload (INCLUDING its 8 trailing checksum chars) is the
+                // whole `rest`. A structural match with a bad checksum rejects.
+                let hrp = prefix
+                    .map(|p| p.trim_end_matches(':').to_lowercase())
+                    .unwrap_or_else(|| "bitcoincash".to_string());
+                if !cashaddr_verify(&hrp, &full_body) {
+                    return Err(ParseError::CashAddrChecksum);
+                }
                 return Ok(Some(Parsed::new(
                     "BCH",
                     BECH32,
@@ -671,7 +722,11 @@ fn parse_lei(text: &str) -> PResult {
         return Ok(None);
     }
     if !lei_checksum_ok(&upper) {
-        return Ok(None);
+        // v14: 20 base36 chars WITH the reserved "00" is an unambiguous LEI
+        // match, and the MOD 97-10 check digits are surfaced as the bound
+        // suffix — so a bad checksum REJECTS rather than falling through to a
+        // generic base36 encoding.
+        return Err(ParseError::LeiChecksum);
     }
     Ok(Some(Parsed::new(
         "LEI",
@@ -845,6 +900,96 @@ fn parse_urn(text: &str) -> PResult {
     ))
 }
 
+// ---- base58check (BTC / LTC legacy) ----
+
+/// Decode a base58 (Bitcoin alphabet) string to raw bytes, preserving
+/// leading-zero bytes (each leading '1' is a 0x00 byte). Used only for checksum
+/// verification; the visualized core is the original text. Returns `None` on any
+/// character outside the base58 alphabet.
+fn base58_decode_bytes(s: &str) -> Option<Vec<u8>> {
+    // Accumulate a base-256 big-endian big integer: acc = acc * 58 + v.
+    let mut acc: Vec<u8> = vec![0];
+    for c in s.chars() {
+        let v = BASE58_CHARS.find(c)? as u32;
+        let mut carry: u32 = v;
+        for byte in acc.iter_mut().rev() {
+            let cur = (*byte as u32) * 58 + carry;
+            *byte = (cur & 0xff) as u8;
+            carry = cur >> 8;
+        }
+        while carry > 0 {
+            acc.insert(0, (carry & 0xff) as u8);
+            carry >>= 8;
+        }
+    }
+    // Strip leading zero bytes from the numeric value, then re-add one 0x00 for
+    // each leading '1' (base58's leading-zero convention).
+    let first_nonzero = acc.iter().position(|&b| b != 0).unwrap_or(acc.len());
+    let mut body: Vec<u8> = acc[first_nonzero..].to_vec();
+    let pad = s.chars().take_while(|&c| c == '1').count();
+    let mut out = vec![0u8; pad];
+    out.append(&mut body);
+    Some(out)
+}
+
+/// True iff `s` decodes to `payload || checksum` where checksum is the first 4
+/// bytes of double-SHA256(payload). The near-universal base58check construction
+/// used by Bitcoin/Litecoin legacy addresses.
+fn base58check_ok(s: &str) -> bool {
+    use sha2::{Digest, Sha256};
+    let raw = match base58_decode_bytes(s) {
+        Some(r) => r,
+        None => return false,
+    };
+    if raw.len() < 5 {
+        return false;
+    }
+    let (payload, checksum) = raw.split_at(raw.len() - 4);
+    let d1 = Sha256::digest(payload);
+    let d2 = Sha256::digest(d1);
+    d2[..4] == *checksum
+}
+
+// ---- CashAddr (Bitcoin Cash) 40-bit BCH checksum ----
+
+/// The 40-bit BCH checksum polymod used by Bitcoin Cash CashAddr (NOT the
+/// bech32 polymod). `values` is a slice of 5-bit ints. Valid iff it returns 0.
+fn cashaddr_polymod(values: &[u64]) -> u64 {
+    const GEN: [u64; 5] = [
+        0x98f2bc8e61,
+        0x79b76d99e2,
+        0xf33e5fb3c4,
+        0xae2eabe2a8,
+        0x1e4f43e470,
+    ];
+    let mut c: u64 = 1;
+    for &d in values {
+        let c0 = c >> 35;
+        c = ((c & 0x07ffffffff) << 5) ^ d;
+        for (i, g) in GEN.iter().enumerate() {
+            if (c0 >> i) & 1 != 0 {
+                c ^= g;
+            }
+        }
+    }
+    c ^ 1
+}
+
+/// True iff CashAddr `payload` (bech32-charset body INCLUDING the trailing 8
+/// checksum chars) carries a valid BCH checksum under `prefix` (lowercase, e.g.
+/// 'bitcoincash' / 'bchtest').
+fn cashaddr_verify(prefix: &str, payload: &str) -> bool {
+    let mut values: Vec<u64> = prefix.chars().map(|c| (c as u64) & 0x1f).collect();
+    values.push(0);
+    for c in payload.to_lowercase().chars() {
+        match BECH32_CHARS.find(c) {
+            Some(i) => values.push(i as u64),
+            None => return false,
+        }
+    }
+    cashaddr_polymod(&values) == 0
+}
+
 // ---- bech32 checksum (generic Cosmos-style) ----
 fn bech32_polymod(values: &[u32]) -> u32 {
     const GEN: [u32; 5] = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3];
@@ -893,7 +1038,13 @@ fn parse_bech32_address(text: &str) -> PResult {
             sep_candidates.push(i);
         }
     }
-    // greedy hrp => prefer the LARGEST separator index that satisfies constraints
+    // greedy hrp => prefer the LARGEST separator index that satisfies the
+    // structural constraints. The Python anchored regex commits to that single
+    // greedy split; we mirror it — the first structurally-valid split is the
+    // match, and its checksum then decides accept vs REJECT (v14: a `<hrp>1<8+
+    // bech32>` string is a clear bech32 structural match, and the 6-char
+    // checksum is surfaced as the bound suffix, so an invalid polymod rejects
+    // rather than falling through to a bare encoding).
     for &sep in sep_candidates.iter().rev() {
         if !(1..=83).contains(&sep) {
             continue;
@@ -906,6 +1057,7 @@ fn parse_bech32_address(text: &str) -> PResult {
         if data.chars().count() < 8 || !all_in(&data, BECH32_CHARS) {
             continue;
         }
+        // Structural match committed (greedy). Validate the checksum.
         match bech32_checksum_const(&hrp, &data) {
             Some(c) if c == 1 || c == 0x2bc830a3 => {
                 let dchars: Vec<char> = data.chars().collect();
@@ -919,7 +1071,7 @@ fn parse_bech32_address(text: &str) -> PResult {
                     Some(suffix),
                 )));
             }
-            _ => continue,
+            _ => return Err(ParseError::Bech32Checksum),
         }
     }
     Ok(None)
@@ -1583,16 +1735,28 @@ mod tests {
     // ===================================================================
     #[test]
     fn bitcoin_legacy_and_segwit() {
-        let legacy = parse_bitcoin_address(&format!("1{}", "a".repeat(33)))
+        // v14: addresses must carry a VALID checksum to parse (real corpus
+        // vectors), and a structural match with a bad checksum is rejected.
+        let legacy = parse_bitcoin_address("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa")
             .unwrap()
             .unwrap();
         assert_eq!(legacy.type_name, "BTC legacy");
         assert_eq!(legacy.prefix.as_deref(), Some("1"));
         assert_eq!(legacy.suffix.as_ref().unwrap().chars().count(), 4);
-        let segwit = parse_bitcoin_address(&format!("bc1{}", "q".repeat(39)))
+        let segwit = parse_bitcoin_address("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4")
             .unwrap()
             .unwrap();
         assert_eq!(segwit.type_name, "BTC SegWit");
+        // v14: legacy structural match, corrupted last checksum char -> reject.
+        assert!(matches!(
+            parse_bitcoin_address("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNb"),
+            Err(ParseError::Base58Check)
+        ));
+        // v14: segwit structural match, corrupted checksum -> reject.
+        assert!(matches!(
+            parse_bitcoin_address("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t5"),
+            Err(ParseError::Bech32Checksum)
+        ));
         // too-short body -> no match
         assert!(parse_bitcoin_address(&format!("1{}", "a".repeat(20)))
             .unwrap()
@@ -1623,38 +1787,54 @@ mod tests {
 
     #[test]
     fn litecoin_legacy_and_bech32() {
-        let legacy = parse_litecoin_address(&format!("L{}", "a".repeat(33)))
+        // v14: a real base58check-valid Litecoin legacy address (mainnet 'L').
+        let legacy = parse_litecoin_address("LKDyUEtTR1HXamkiEphisSiBJu6o3ZPE34")
             .unwrap()
             .unwrap();
         assert_eq!(legacy.type_name, "LTC legacy");
-        let tlegacy = parse_litecoin_address(&format!("tL{}", "a".repeat(33)))
-            .unwrap()
-            .unwrap();
-        assert_eq!(tlegacy.prefix.as_deref(), Some("tL"));
-        let bech = parse("ltc1qhw6dgkk52v9eqzukju7vrqpw0jt4wll6e6n4q5")
+        assert_eq!(legacy.prefix.as_deref(), Some("L"));
+        // v14: corrupted checksum on the legacy path -> reject.
+        assert!(matches!(
+            parse_litecoin_address("LKDyUEtTR1HXamkiEphisSiBJu6o3ZPE3a"),
+            Err(ParseError::Base58Check)
+        ));
+        // ltc1 bech32 (corpus vector).
+        let bech = parse("ltc1qw508d6qejxtdg4y5r3zarvary0c5xw7kgmn4n9")
             .unwrap()
             .unwrap();
         assert_eq!(bech.type_name, "LTC");
+        // v14: corrupted ltc1 checksum -> reject.
+        assert!(matches!(
+            parse_litecoin_address("ltc1qw508d6qejxtdg4y5r3zarvary0c5xw7kgmn4n8"),
+            Err(ParseError::Bech32Checksum)
+        ));
         assert!(parse_litecoin_address("Lshort").unwrap().is_none());
     }
 
     #[test]
     fn bitcoin_cash_with_and_without_prefix() {
+        // v14: CashAddr must carry a valid 40-bit BCH checksum (real vectors).
         let p = parse("bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a")
             .unwrap()
             .unwrap();
         assert_eq!(p.type_name, "BCH");
         assert_eq!(p.prefix.as_deref(), Some("bitcoincash:"));
-        // bchtest prefix branch
-        let t = parse_bitcoin_cash_address(&format!("bchtest:q{}", "q".repeat(41)))
+        // bchtest prefix branch (checksum computed under the bchtest hrp).
+        let t = parse_bitcoin_cash_address("bchtest:qpur7lcrzhq247gvqs5n79hj0tz4edmdqg09nfandy")
             .unwrap()
             .unwrap();
         assert_eq!(t.prefix.as_deref(), Some("bchtest:"));
-        // bare p/q body, no prefix
-        let bare = parse_bitcoin_cash_address(&format!("p{}", "q".repeat(41)))
+        // bare p/q body, no prefix -> checksum verified under the default
+        // "bitcoincash" hrp.
+        let bare = parse_bitcoin_cash_address("qpur7lcrzhq247gvqs5n79hj0tz4edmdqgthhwly2c")
             .unwrap()
             .unwrap();
         assert!(bare.prefix.is_none());
+        // v14: a structural CashAddr match with a corrupted checksum -> reject.
+        assert!(matches!(
+            parse_bitcoin_cash_address("bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6q"),
+            Err(ParseError::CashAddrChecksum)
+        ));
         // wrong leading char
         assert!(parse_bitcoin_cash_address(&format!("z{}", "q".repeat(41)))
             .unwrap()
@@ -1745,8 +1925,12 @@ mod tests {
         assert!(parse_lei("5493991KJTIIGC8Y1R12").unwrap().is_none());
         // wrong length
         assert!(parse_lei("549300").unwrap().is_none());
-        // valid structure but bad checksum
-        assert!(parse_lei("5493001KJTIIGC8Y1R99").unwrap().is_none());
+        // v14: valid structure (reserved "00" present) but bad MOD 97-10 check
+        // digits -> REJECT (previously fell through to a bare base36 encoding).
+        assert!(matches!(
+            parse_lei("5493001KJTIIGC8Y1R99"),
+            Err(ParseError::LeiChecksum)
+        ));
     }
 
     #[test]
@@ -1754,6 +1938,49 @@ mod tests {
         assert!(lei_checksum_ok("5493001KJTIIGC8Y1R12"));
         // lowercase / non-alnum chars make the helper reject
         assert!(!lei_checksum_ok("abc def"));
+    }
+
+    // ===================================================================
+    // v14 checksum helpers — corpus-independent (exercised in the coverage job).
+    // ===================================================================
+    #[test]
+    fn base58_decode_preserves_leading_zeros() {
+        // A valid BTC legacy address (version byte 0x00 -> one leading '1').
+        let raw = base58_decode_bytes("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa").unwrap();
+        assert_eq!(raw[0], 0x00); // leading '1' -> 0x00 payload byte
+        assert_eq!(raw.len(), 25); // 1 version + 20 hash + 4 checksum
+                                   // A char outside the base58 alphabet -> None.
+        assert!(base58_decode_bytes("0OIl").is_none());
+    }
+
+    #[test]
+    fn base58check_ok_accepts_valid_rejects_corrupt() {
+        assert!(base58check_ok("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"));
+        assert!(!base58check_ok("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNb"));
+        // Too short to hold a 4-byte checksum -> false.
+        assert!(!base58check_ok("1"));
+    }
+
+    #[test]
+    fn cashaddr_verify_accepts_valid_rejects_corrupt() {
+        assert!(cashaddr_verify(
+            "bitcoincash",
+            "qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a"
+        ));
+        assert!(!cashaddr_verify(
+            "bitcoincash",
+            "qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6q"
+        ));
+        // A non-charset character in the payload -> false.
+        assert!(!cashaddr_verify("bitcoincash", "qpm2!"));
+    }
+
+    #[test]
+    fn cashaddr_polymod_is_zero_for_valid() {
+        // The verify helper returns true iff cashaddr_polymod(values) == 0;
+        // exercise the raw polymod on a valid vector and a mutated one.
+        let ok = cashaddr_verify("bchtest", "qpur7lcrzhq247gvqs5n79hj0tz4edmdqg09nfandy");
+        assert!(ok);
     }
 
     // ===================================================================
@@ -1830,12 +2057,12 @@ mod tests {
         assert_eq!(p.prefix.as_deref(), Some("cosmos1"));
         // no separator '1' -> no match
         assert!(parse_bech32_address("cosmosqqqq").unwrap().is_none());
-        // bad checksum -> no match
-        assert!(
-            parse_bech32_address("cosmos1qqqsyqcyq5rqwzqfpg9scrgwpugpzysnrk3630")
-                .unwrap()
-                .is_none()
-        );
+        // v14: a `<hrp>1<8+ bech32>` structural match with a bad checksum now
+        // REJECTS (previously fell through to Ok(None)).
+        assert!(matches!(
+            parse_bech32_address("cosmos1qqqsyqcyq5rqwzqfpg9scrgwpugpzysnrk363f"),
+            Err(ParseError::Bech32Checksum)
+        ));
     }
 
     // ===================================================================

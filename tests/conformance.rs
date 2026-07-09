@@ -116,6 +116,78 @@ fn color_bar_map(svg: &str) -> std::collections::BTreeMap<usize, String> {
     out
 }
 
+/// Concatenated text content of the FIRST element carrying
+/// `data-channel="<channel>"`, with all XML tags (e.g. the styled `<tspan>`s for
+/// the truncation marker / user note) stripped and entity-unescaped. Returns
+/// `None` when the channel group is absent (e.g. no bottom strip).
+fn channel_text(svg: &str, channel: &str) -> Option<String> {
+    let needle = format!("data-channel=\"{channel}\"");
+    let anchor = svg.find(&needle)? + needle.len();
+    // The group opens with `<g data-channel="...">`; find its content start
+    // (the '>' closing the <g>) and its matching '</g>'.
+    let content_start = anchor + svg[anchor..].find('>')? + 1;
+    let content_end = content_start + svg[content_start..].find("</g>")?;
+    let inner = &svg[content_start..content_end];
+    // Strip every tag, keep the text nodes.
+    let mut out = String::new();
+    let mut in_tag = false;
+    for c in inner.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    Some(xml_unescape(&out))
+}
+
+/// Assert the v14 top/bottom label strips against the golden `model.labels`.
+/// The top strip is always present; the bottom strip is present only when the
+/// model's `labels.bottom` is a non-null string.
+fn assert_labels_match(svg: &str, model: &Value, bad: &mut dyn FnMut(String)) {
+    let labels = match model.get("labels") {
+        Some(l) if l.is_object() => l,
+        _ => return,
+    };
+    // top: always present, exact match.
+    let want_top = labels["top"].as_str().unwrap_or("");
+    match channel_text(svg, "label-top") {
+        Some(got) if got == want_top => {}
+        got => bad(format!(
+            "label top {:?} != model {want_top:?}",
+            got.as_deref().unwrap_or("<missing>")
+        )),
+    }
+    // bottom: model holds a string or null. When null, the SVG must not emit a
+    // label-bottom group; when a string, it must match exactly.
+    match labels["bottom"].as_str() {
+        Some(want_bottom) => match channel_text(svg, "label-bottom") {
+            Some(got) if got == want_bottom => {}
+            got => bad(format!(
+                "label bottom {:?} != model {want_bottom:?}",
+                got.as_deref().unwrap_or("<missing>")
+            )),
+        },
+        None => {
+            if let Some(got) = channel_text(svg, "label-bottom") {
+                bad(format!(
+                    "label bottom present {got:?} but model bottom is null"
+                ));
+            }
+        }
+    }
+    // truncation_marker: the model flags whether the bold `fingerprint of `
+    // marker is drawn; the SVG carries it as a leading tspan inside label-top.
+    let want_marker = labels["truncation_marker"].as_bool().unwrap_or(false);
+    let got_marker = svg.contains("font-weight=\"bold\">fingerprint of </tspan>");
+    if want_marker != got_marker {
+        bad(format!(
+            "truncation_marker={got_marker} but model={want_marker}"
+        ));
+    }
+}
+
 /// Compare the SVG's semantic fields against the golden model.json. Pushes one
 /// human-readable line per mismatch into `failures`.
 fn assert_model_match(vid: &str, svg: &str, model: &Value, failures: &mut Vec<String>) {
@@ -325,6 +397,10 @@ fn assert_model_match(vid: &str, svg: &str, model: &Value, failures: &mut Vec<St
             ));
         }
     }
+
+    // --- v14 label strips (top/bottom projection + truncation marker) ---
+    // Routed through `bad` so each message gets the {vid} prefix like the rest.
+    assert_labels_match(svg, model, &mut bad);
 }
 
 #[test]

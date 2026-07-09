@@ -1,5 +1,5 @@
-//! Entropy characterization model (spec v13) — port of
-//! `src/entviz/characterize.py`.
+//! Entropy characterization model (spec v13) + label projection (spec v14) —
+//! port of `src/entviz/characterize.py`.
 //!
 //! The parser ([`crate::entropy`]) produces a [`Parsed`] display record whose
 //! `type_name` string fuses several orthogonal facts (scheme, semantic role,
@@ -446,6 +446,223 @@ pub fn characterize(entropy: &str) -> Result<Characterization, entropy::ParseErr
     }
 }
 
+// ---------------------------------------------------------------------------
+// Label projection (spec v14).
+//
+// The visible top/bottom label strips are a PURE PROJECTION of the eight
+// characterization fields through one grammar — no per-parser string fusing.
+// Every implementation renders the same strips by running this same function
+// over the shared fields. Port of `entviz.characterize.render_label`; see
+// docs/spec.md -> "Label strips" and reviews/v14-label-redesign.md.
+//
+//   top    = [fingerprint of ]PRIMARY[, MOD]...[, SIZE]
+//   bottom = ...<suffix>[ (<note>)]
+//
+// Slot separator is ", " (comma-space); no trailing ':' or '...'.
+// ---------------------------------------------------------------------------
+
+/// The `fingerprint of ` marker prepended to the top strip for >512-bit
+/// truncated inputs. The renderer splits it back out to style it bold dark-red.
+pub const TRUNC_MARKER: &str = "fingerprint of ";
+
+fn qval_str<'a>(q: &'a Qualifiers, key: &str) -> Option<&'a str> {
+    q.0.iter()
+        .find(|(k, _)| k == key)
+        .and_then(|(_, v)| match v {
+            QVal::Str(s) => Some(s.as_str()),
+            QVal::Int(_) => None,
+        })
+}
+
+fn qval_int(q: &Qualifiers, key: &str) -> Option<i64> {
+    q.0.iter()
+        .find(|(k, _)| k == key)
+        .and_then(|(_, v)| match v {
+            QVal::Int(i) => Some(*i),
+            QVal::Str(_) => None,
+        })
+}
+
+/// Bare-encoding display shortening for the PRIMARY slot when scheme is null
+/// and the basis is decoded (base64 -> b64, base64url -> b64url; others verbatim).
+fn encoding_primary(enc: &str) -> &str {
+    match enc {
+        "base64" => "b64",
+        "base64url" => "b64url",
+        other => other,
+    }
+}
+
+/// scheme -> visible PRIMARY short-name for the non-self-describing schemes.
+fn scheme_primary(scheme: &str) -> Option<&'static str> {
+    Some(match scheme {
+        "eth" => "ETH",
+        "btc" => "BTC",
+        "ltc" => "LTC",
+        "bch" => "BCH",
+        "ada" => "ADA",
+        "xrp" => "XRP",
+        "stellar" => "XLM",
+        "eos" => "EOS",
+        "uuid" => "UUID",
+        "ulid" => "ULID",
+        "lei" => "LEI",
+        "snowflake" => "snowflake",
+        "ssh" => "SSH",
+        "cesr" => "CESR",
+        "bech32" => "bech32",
+        "multihash" => "multihash",
+        _ => return None,
+    })
+}
+
+fn is_blockchain_scheme(scheme: &str) -> bool {
+    matches!(
+        scheme,
+        "btc" | "ltc" | "bch" | "ada" | "eth" | "xrp" | "stellar" | "eos" | "bech32"
+    )
+}
+
+/// The PRIMARY slot: the always-present head of the top label.
+fn primary(ch: &Characterization) -> String {
+    let q = &ch.qualifiers;
+    match ch.scheme.as_deref() {
+        None => {
+            if ch.size_basis == "utf8" {
+                "text".to_string()
+            } else {
+                encoding_primary(&ch.encoding).to_string()
+            }
+        }
+        Some("did") => format!("did:{}", qval_str(q, "method").unwrap_or("")),
+        Some("urn") => format!("urn:{}", qval_str(q, "nid").unwrap_or("")),
+        Some("gitoid") => format!(
+            "gitoid:{}:{}",
+            qval_str(q, "object").unwrap_or(""),
+            qval_str(q, "algorithm").unwrap_or("")
+        ),
+        Some("swhid") => format!("swh:1:{}", qval_str(q, "object").unwrap_or("")),
+        Some("cid") => {
+            if qval_int(q, "version") == Some(0) {
+                "CIDv0".to_string()
+            } else {
+                "CIDv1".to_string()
+            }
+        }
+        Some(scheme) => scheme_primary(scheme).unwrap_or(scheme).to_string(),
+    }
+}
+
+/// The MOD slots (zero or more): silent-default / loud-departure facets.
+fn mods(ch: &Characterization) -> Vec<String> {
+    let q = &ch.qualifiers;
+    let mut out = Vec::new();
+    match ch.scheme.as_deref() {
+        Some("cesr") => {
+            // The primitive with the redundant role word dropped: strip a
+            // trailing " pubkey" (role=key/digest is implied by the primitive).
+            if let Some(algo) = qval_str(q, "algorithm") {
+                let algo = algo.strip_suffix(" pubkey").unwrap_or(algo);
+                if !algo.is_empty() {
+                    out.push(algo.to_string());
+                }
+            }
+        }
+        Some("ssh") => {
+            if let Some(algo) = qval_str(q, "algorithm") {
+                out.push(algo.to_string());
+            }
+        }
+        Some("cid") => {
+            // CIDv0 is dag-pb/sha2-256 by definition -> no MOD. CIDv1: codec
+            // always; hash only on departure from sha2-256.
+            if qval_int(q, "version") != Some(0) {
+                if let Some(codec) = qval_str(q, "codec") {
+                    out.push(codec.to_string());
+                }
+                if let Some(hash) = qval_str(q, "hash") {
+                    if hash != "sha2-256" {
+                        out.push(hash.to_string());
+                    }
+                }
+            }
+        }
+        Some("multihash") => {
+            if let Some(hash) = qval_str(q, "hash") {
+                if hash != "sha2-256" {
+                    out.push(hash.to_string());
+                }
+            }
+        }
+        Some(scheme) if is_blockchain_scheme(scheme) => {
+            // Network only on departure (testnet); mainnet silent. Variant dropped.
+            if let Some(network) = qval_str(q, "network") {
+                if network != "mainnet" {
+                    out.push(network.to_string());
+                }
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
+/// The SIZE slot (zero or one), or None when omitted.
+fn size(ch: &Characterization) -> Option<String> {
+    match ch.scheme.as_deref() {
+        None => {
+            if ch.size_basis == "utf8" {
+                Some(format!("{}-byte", ch.size_bits / 8))
+            } else {
+                Some(format!("{}-bit", ch.size_bits))
+            }
+        }
+        Some("ssh") | Some("multihash") => Some(format!("{}-bit", ch.size_bits)),
+        _ => None,
+    }
+}
+
+/// Project a characterization into the (top, bottom) label strips (v14).
+///
+/// * `top`    = `[fingerprint of ]PRIMARY[, MOD]...[, SIZE]` — ", " joined,
+///   no trailing `:` or `...`. The `fingerprint of ` marker is prepended when
+///   `truncated`; the renderer splits it back out to style it.
+/// * `bottom` = `...<suffix>` then ` (<note>)` — the bound (now-verified)
+///   checksum and the user caption. Empty string when neither is present.
+pub fn render_label(
+    ch: &Characterization,
+    truncated: bool,
+    suffix: Option<&str>,
+    note: Option<&str>,
+) -> (String, String) {
+    let mut slots = vec![primary(ch)];
+    slots.extend(mods(ch));
+    if let Some(sz) = size(ch) {
+        slots.push(sz);
+    }
+    let mut top = slots.join(", ");
+    if truncated {
+        top = format!("{TRUNC_MARKER}{top}");
+    }
+
+    let mut bottom = String::new();
+    if let Some(suf) = suffix {
+        if !suf.is_empty() {
+            bottom = format!("...{suf}");
+        }
+    }
+    if let Some(nt) = note {
+        if !nt.is_empty() {
+            bottom = if bottom.is_empty() {
+                format!("({nt})")
+            } else {
+                format!("{bottom} ({nt})")
+            };
+        }
+    }
+    (top, bottom)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -632,8 +849,9 @@ mod tests {
     // ---- BTC legacy address (network + variant, base58 integer-decode) ----
     #[test]
     fn btc_legacy_is_address_mainnet_legacy() {
-        let input = format!("1{}", "a".repeat(33));
-        let c = ch(&input);
+        // v14: a real base58check-valid legacy address (synthetic ones now
+        // reject on the checksum).
+        let c = ch("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa");
         assert_eq!(c.scheme.as_deref(), Some("btc"));
         assert_eq!(c.role, Some(ROLE_ADDRESS));
         assert_eq!(c.encoding, "base58");
@@ -647,8 +865,7 @@ mod tests {
     // ---- BTC segwit variant branch ----
     #[test]
     fn btc_segwit_is_address_segwit() {
-        let input = format!("bc1{}", "q".repeat(39));
-        let c = ch(&input);
+        let c = ch("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4");
         assert_eq!(c.scheme.as_deref(), Some("btc"));
         assert_eq!(
             c.qualifiers.to_json(),
@@ -664,7 +881,8 @@ mod tests {
         assert_eq!(m.role, Some(ROLE_ADDRESS));
         assert_eq!(m.qualifiers.to_json(), "{\"network\":\"mainnet\"}");
 
-        let t = ch(&format!("bchtest:q{}", "q".repeat(41)));
+        // v14: a real bchtest CashAddr (checksum computed under the bchtest hrp).
+        let t = ch("bchtest:qpur7lcrzhq247gvqs5n79hj0tz4edmdqg09nfandy");
         assert_eq!(t.scheme.as_deref(), Some("bch"));
         assert_eq!(t.qualifiers.to_json(), "{\"network\":\"testnet\"}");
     }
@@ -672,8 +890,8 @@ mod tests {
     // ---- LTC legacy variant branch (lines 289-294) ----
     #[test]
     fn ltc_legacy_is_address_with_legacy_variant() {
-        let input = format!("L{}", "a".repeat(33));
-        let c = ch(&input);
+        // v14: a real base58check-valid Litecoin legacy address.
+        let c = ch("LKDyUEtTR1HXamkiEphisSiBJu6o3ZPE34");
         assert_eq!(c.scheme.as_deref(), Some("ltc"));
         assert_eq!(c.role, Some(ROLE_ADDRESS));
         assert_eq!(
@@ -685,7 +903,7 @@ mod tests {
     // ---- LTC bech32 (no legacy variant; network only) ----
     #[test]
     fn ltc_bech32_is_address_no_variant() {
-        let c = ch("ltc1qhw6dgkk52v9eqzukju7vrqpw0jt4wll6e6n4q5");
+        let c = ch("ltc1qw508d6qejxtdg4y5r3zarvary0c5xw7kgmn4n9");
         assert_eq!(c.scheme.as_deref(), Some("ltc"));
         assert_eq!(c.qualifiers.to_json(), "{\"network\":\"mainnet\"}");
     }
@@ -856,5 +1074,127 @@ mod tests {
         assert_eq!(c.scheme.as_deref(), Some("cid"));
         assert_eq!(c.role, Some(ROLE_IDENTIFIER));
         assert_eq!(c.qualifiers.to_json(), "{\"version\":1}");
+    }
+
+    // ==================================================================
+    // v14 label projection (render_label) — corpus-independent unit tests
+    // covering every grammar arm (PRIMARY / MOD / SIZE, bottom strip, marker),
+    // so the projection is exercised in the coverage job (no ../entviz corpus).
+    // Values match the reviews/v14-label-redesign.md before->after table.
+    // ==================================================================
+
+    fn top_of(s: &str) -> String {
+        let c = ch(s);
+        render_label(&c, false, None, None).0
+    }
+
+    #[test]
+    fn label_bare_encodings_show_encoding_and_size() {
+        // hex, 256-bit / text, 56-byte / b64 & b64url short-names.
+        assert_eq!(
+            top_of("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde0"),
+            "hex, 256-bit"
+        );
+        // 56-byte lorem text -> utf8 byte SIZE (spaces/punctuation force the
+        // UTF-8 fallback rather than a bare encoding).
+        assert_eq!(
+            top_of("Lorem ipsum dolor sit amet, consectetur adipiscing elit."),
+            "text, 56-byte"
+        );
+        assert_eq!(top_of("ABC+/DEF"), "b64, 48-bit");
+        assert_eq!(top_of("ABC-_DEF"), "b64url, 48-bit");
+    }
+
+    #[test]
+    fn label_scheme_short_names_omit_size() {
+        assert_eq!(top_of("0x742d35cc6634c0532925a3b844bc454e4438f44e"), "ETH");
+        assert_eq!(top_of("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"), "BTC");
+        assert_eq!(top_of("550e8400-e29b-41d4-a716-446655440000"), "UUID");
+        assert_eq!(top_of("5493001KJTIIGC8Y1R12"), "LEI");
+        assert_eq!(top_of("80351110224678912"), "snowflake");
+        assert_eq!(top_of("rUocf1ixKzTuEe34kmVhRvGqNCofY1NJzV"), "XRP");
+    }
+
+    #[test]
+    fn label_cesr_drops_redundant_pubkey_word() {
+        // "Ed25519 nt pubkey" -> "CESR, Ed25519 nt"; "Ed25519 pubkey" ->
+        // "CESR, Ed25519"; a digest primitive stays verbatim.
+        assert_eq!(
+            top_of("BGKOqfCS08j0Spr6NfZQt4jXQMbAWo2ynBFjBg5Eib9v"),
+            "CESR, Ed25519 nt"
+        );
+        assert_eq!(
+            top_of("DKxy2sgzfplyr_tgwIxS19f2OchFHtLwPWD3v4oYimBx"),
+            "CESR, Ed25519"
+        );
+        assert_eq!(
+            top_of("EBfdlu8R27Fbx_ehrqwImnK_8Cm79sqbAQ4caaZG_LFv"),
+            "CESR, Blake3-256"
+        );
+    }
+
+    #[test]
+    fn label_self_describing_prefixes() {
+        assert_eq!(
+            top_of("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"),
+            "did:key"
+        );
+        assert_eq!(top_of("urn:isbn:0451450523"), "urn:isbn");
+        assert_eq!(
+            top_of("swh:1:rev:309cf2674ee7a0749978cf8265ab91a60aea0f7d"),
+            "swh:1:rev"
+        );
+        assert_eq!(
+            top_of(
+                "gitoid:blob:sha256:473a0f4c3be8a93681a267e3b1e9a7dcda1185436fe141f7749120a303721813"
+            ),
+            "gitoid:blob:sha256"
+        );
+    }
+
+    #[test]
+    fn label_cid_and_ssh_and_multihash_mods_and_size() {
+        // CIDv0 -> no MOD; CIDv1 -> codec MOD; SSH -> algorithm MOD + bit SIZE.
+        assert_eq!(
+            top_of("QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG"),
+            "CIDv0"
+        );
+        assert_eq!(
+            top_of("bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"),
+            "CIDv1, dag-pb"
+        );
+        assert_eq!(
+            top_of(
+                "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDtJVH9hM+2DyhmgRZBfeIDoVqCTbXY+0nKlS5pTkkXY"
+            ),
+            "SSH, ed25519, 264-bit"
+        );
+    }
+
+    #[test]
+    fn label_blockchain_network_departure_and_variant_drop() {
+        // A testnet BCH shows the loud "testnet" MOD; the legacy/segwit variant
+        // is dropped, and mainnet stays silent (btc above shows bare "BTC").
+        let c = ch("bchtest:qpur7lcrzhq247gvqs5n79hj0tz4edmdqg09nfandy");
+        assert_eq!(render_label(&c, false, None, None).0, "BCH, testnet");
+    }
+
+    #[test]
+    fn label_truncation_marker_and_bottom_strip() {
+        // Truncated (>512-bit) prepends the loud marker; the renderer splits it.
+        let big = ch(&"a".repeat(400));
+        let (top, bottom) = render_label(&big, true, None, None);
+        assert!(top.starts_with(TRUNC_MARKER));
+        assert_eq!(bottom, "");
+        // Bottom strip: suffix only, note only, and both.
+        let c = ch("0123456789abcdef0123456789abcdef");
+        assert_eq!(render_label(&c, false, Some("vfNa"), None).1, "...vfNa");
+        assert_eq!(render_label(&c, false, None, Some("git")).1, "(git)");
+        assert_eq!(
+            render_label(&c, false, Some("12"), Some("hi")).1,
+            "...12 (hi)"
+        );
+        // Empty suffix / empty note collapse to nothing.
+        assert_eq!(render_label(&c, false, Some(""), Some("")).1, "");
     }
 }

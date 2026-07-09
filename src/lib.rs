@@ -1,6 +1,6 @@
-//! entviz — Rust reference port (spec v13).
+//! entviz — Rust reference port (spec v14).
 //!
-//! **STATUS: CERTIFIED v13.** This crate is a full, self-contained entviz
+//! **STATUS: CERTIFIED v14.** This crate is a full, self-contained entviz
 //! implementation: the deterministic shared core (tokenization + quant
 //! extension, the SHA-512 fingerprint, ftok median/quartile selection, the
 //! Oklab color rules, grid selection), the format-specific parsers
@@ -23,7 +23,7 @@ use base64::Engine;
 use sha2::{Digest, Sha512};
 use std::collections::BTreeMap;
 
-pub const SPEC_VERSION: &str = "v13";
+pub const SPEC_VERSION: &str = "v14";
 
 pub mod characterize;
 pub mod entropy;
