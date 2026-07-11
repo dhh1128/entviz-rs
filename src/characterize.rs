@@ -447,23 +447,73 @@ pub fn characterize(entropy: &str) -> Result<Characterization, entropy::ParseErr
 }
 
 // ---------------------------------------------------------------------------
-// Label projection (spec v14).
+// Label projection (spec v15).
 //
 // The visible top/bottom label strips are a PURE PROJECTION of the eight
 // characterization fields through one grammar — no per-parser string fusing.
 // Every implementation renders the same strips by running this same function
 // over the shared fields. Port of `entviz.characterize.render_label`; see
-// docs/spec.md -> "Label strips" and reviews/v14-label-redesign.md.
+// docs/spec.md -> "Label strips".
 //
-//   top    = [fingerprint of ]PRIMARY[, MOD]...[, SIZE]
+//   top    = [+hash ]PRIMARY[, MOD]...[, SIZE][, PREFIX]
 //   bottom = ...<suffix>[ (<note>)]
 //
 // Slot separator is ", " (comma-space); no trailing ':' or '...'.
 // ---------------------------------------------------------------------------
 
-/// The `fingerprint of ` marker prepended to the top strip for >512-bit
-/// truncated inputs. The renderer splits it back out to style it bold dark-red.
-pub const TRUNC_MARKER: &str = "fingerprint of ";
+/// The `+hash ` marker prepended to the top strip for >512-bit truncated
+/// inputs (v15; was `fingerprint of `). The renderer splits it back out to
+/// style it bold dark-red. Read as "the value augmented with a hash of the
+/// parts that didn't fit" — the leading `+` is additive, not substitutive.
+/// Kept as the single source of truth for both the projection and the
+/// split-for-styling in the pipeline. See docs/spec.md.
+pub const TRUNC_MARKER: &str = "+hash ";
+
+/// ASCII elision marker for a truncated prefix slot (matches the bottom
+/// strip's `...<suffix>` convention; no Unicode ellipsis, so the
+/// printable-ASCII / unicode guard is satisfied and cross-implementation font
+/// behavior is uniform).
+const PREFIX_ELLIPSIS: &str = "...";
+
+/// Minimum number of LEADING prefix characters kept when the prefix is
+/// truncated. The label-line budget can leave a big prefix (only SSH's
+/// structural header is ever this long) almost no room; without a floor it
+/// would collapse to a bare `...`. Keeping a few head chars honors "show the
+/// first few characters, then an ellipsis".
+const PREFIX_MIN_HEAD: usize = 4;
+
+/// The literal front prefix that was stripped from the visualized core, or
+/// `None`. A leading `bind="none"` part — a presentation sigil peeled off the
+/// front (`0x`, `bc1`, `cosmos1`, Stellar `G`, the SSH structural header, …).
+/// A folded identity prefix (`bind="fold"`: did/urn/gitoid/swhid) is NOT
+/// returned — it is already shown verbatim as the PRIMARY slot. A `bind="core"`
+/// leading part (a CESR derivation code, in the first cell) is likewise not a
+/// stripped prefix. So the slot fires iff `parts[0].bind == "none"`.
+fn stripped_prefix(ch: &Characterization) -> Option<&str> {
+    match ch.parts.first() {
+        Some(p) if p.bind == "none" => Some(p.text.as_str()),
+        _ => None,
+    }
+}
+
+/// Truncate the literal prefix slot to `avail` characters with a trailing
+/// `...` elision marker. The prefix is the sole ELASTIC label element (v15):
+/// PRIMARY/MOD/SIZE are never truncated. When the prefix does not fit, it is
+/// cut to `<head> + "..."`; the head length is floored at `PREFIX_MIN_HEAD` so
+/// a long prefix on a tight line (only SSH's structural header hits this) still
+/// shows a few leading characters rather than collapsing to a bare `...`. A
+/// prefix that fits is shown verbatim. `avail` may be non-positive on a very
+/// tight line; the head floor still applies.
+fn fit_prefix(prefix: &str, avail: isize) -> String {
+    let len = prefix.chars().count() as isize;
+    if len <= avail {
+        return prefix.to_string();
+    }
+    let keep = std::cmp::max(avail - PREFIX_ELLIPSIS.len() as isize, PREFIX_MIN_HEAD as isize);
+    let keep = keep as usize;
+    let head: String = prefix.chars().take(keep).collect();
+    format!("{head}{PREFIX_ELLIPSIS}")
+}
 
 fn qval_str<'a>(q: &'a Qualifiers, key: &str) -> Option<&'a str> {
     q.0.iter()
@@ -570,7 +620,12 @@ fn mods(ch: &Characterization) -> Vec<String> {
         }
         Some("ssh") => {
             if let Some(algo) = qval_str(q, "algorithm") {
-                out.push(algo.to_string());
+                // v15: shorten the ECDSA curve to its common short name for the
+                // label — "ecdsa-nistp256" -> "ecdsa-p256" (there is no rival
+                // non-NIST "p256"; the algorithm word stays, only the redundant
+                // standards-body prefix drops). The data-qualifiers `algorithm`
+                // field keeps the faithful SSH curve id ("ecdsa-nistp256").
+                out.push(algo.replace("nistp", "p"));
             }
         }
         Some("cid") => {
@@ -622,24 +677,55 @@ fn size(ch: &Characterization) -> Option<String> {
     }
 }
 
-/// Project a characterization into the (top, bottom) label strips (v14).
+/// Project a characterization into the (top, bottom) label strips (v15).
 ///
-/// * `top`    = `[fingerprint of ]PRIMARY[, MOD]...[, SIZE]` — ", " joined,
-///   no trailing `:` or `...`. The `fingerprint of ` marker is prepended when
-///   `truncated`; the renderer splits it back out to style it.
+/// * `top` = `[+hash ]PRIMARY[, MOD]...[, SIZE][, <prefix>]` — ", " joined,
+///   no trailing `:`. The `+hash ` marker is prepended when `truncated`; the
+///   renderer splits it back out to style it. The trailing `<prefix>` slot
+///   (v15) echoes a front prefix that was stripped from the visualized core (a
+///   `bind="none"` leading part) so the reader can reconcile the pasted value
+///   against the cells; it is the only slot that may be truncated and may then
+///   end in `...`. Fold-prefix schemes (did/urn/gitoid/swhid) show their prefix
+///   as PRIMARY and get no extra slot.
 /// * `bottom` = `...<suffix>` then ` (<note>)` — the bound (now-verified)
 ///   checksum and the user caption. Empty string when neither is present.
+///
+/// `line_chars` is the monospace character budget the grid leaves for the top
+/// strip (used only to truncate the elastic prefix slot). `None` = do not
+/// truncate (pure projection with no geometry).
 pub fn render_label(
     ch: &Characterization,
     truncated: bool,
     suffix: Option<&str>,
     note: Option<&str>,
+    line_chars: Option<usize>,
 ) -> (String, String) {
     let mut slots = vec![primary(ch)];
     slots.extend(mods(ch));
     if let Some(sz) = size(ch) {
         slots.push(sz);
     }
+
+    if let Some(prefix) = stripped_prefix(ch) {
+        let prefix = match line_chars {
+            Some(budget) => {
+                // Budget left for the prefix = the line budget minus the marker
+                // and the fixed PRIMARY/MOD/SIZE core (which never truncate) and
+                // the ", " that joins the prefix slot.
+                let marker_len = if truncated {
+                    TRUNC_MARKER.chars().count() as isize
+                } else {
+                    0
+                };
+                let core_len = slots.join(", ").chars().count() as isize;
+                let avail = budget as isize - marker_len - core_len - ", ".len() as isize;
+                fit_prefix(prefix, avail)
+            }
+            None => prefix.to_string(),
+        };
+        slots.push(prefix);
+    }
+
     let mut top = slots.join(", ");
     if truncated {
         top = format!("{TRUNC_MARKER}{top}");
@@ -1085,7 +1171,7 @@ mod tests {
 
     fn top_of(s: &str) -> String {
         let c = ch(s);
-        render_label(&c, false, None, None).0
+        render_label(&c, false, None, None, None).0
     }
 
     #[test]
@@ -1107,12 +1193,15 @@ mod tests {
 
     #[test]
     fn label_scheme_short_names_omit_size() {
-        assert_eq!(top_of("0x742d35cc6634c0532925a3b844bc454e4438f44e"), "ETH");
-        assert_eq!(top_of("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"), "BTC");
+        // v15: schemes whose front prefix was stripped (bind="none") echo it as
+        // a trailing slot — ETH/BTC/XRP show "0x"/"1"/"r"; UUID/LEI/snowflake
+        // have no stripped prefix (parts[0].bind is "core") so no slot.
+        assert_eq!(top_of("0x742d35cc6634c0532925a3b844bc454e4438f44e"), "ETH, 0x");
+        assert_eq!(top_of("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"), "BTC, 1");
         assert_eq!(top_of("550e8400-e29b-41d4-a716-446655440000"), "UUID");
         assert_eq!(top_of("5493001KJTIIGC8Y1R12"), "LEI");
         assert_eq!(top_of("80351110224678912"), "snowflake");
-        assert_eq!(top_of("rUocf1ixKzTuEe34kmVhRvGqNCofY1NJzV"), "XRP");
+        assert_eq!(top_of("rUocf1ixKzTuEe34kmVhRvGqNCofY1NJzV"), "XRP, r");
     }
 
     #[test]
@@ -1155,19 +1244,22 @@ mod tests {
     #[test]
     fn label_cid_and_ssh_and_multihash_mods_and_size() {
         // CIDv0 -> no MOD; CIDv1 -> codec MOD; SSH -> algorithm MOD + bit SIZE.
+        // v15: each echoes its stripped front prefix as a trailing slot (Qm / b
+        // / the SSH structural header). top_of passes no line budget, so the SSH
+        // header shows in full (truncation is exercised via the pipeline).
         assert_eq!(
             top_of("QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG"),
-            "CIDv0"
+            "CIDv0, Qm"
         );
         assert_eq!(
             top_of("bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"),
-            "CIDv1, dag-pb"
+            "CIDv1, dag-pb, b"
         );
         assert_eq!(
             top_of(
                 "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDtJVH9hM+2DyhmgRZBfeIDoVqCTbXY+0nKlS5pTkkXY"
             ),
-            "SSH, ed25519, 264-bit"
+            "SSH, ed25519, 264-bit, AAAAC3NzaC1lZDI1NTE5AAAA"
         );
     }
 
@@ -1176,25 +1268,29 @@ mod tests {
         // A testnet BCH shows the loud "testnet" MOD; the legacy/segwit variant
         // is dropped, and mainnet stays silent (btc above shows bare "BTC").
         let c = ch("bchtest:qpur7lcrzhq247gvqs5n79hj0tz4edmdqg09nfandy");
-        assert_eq!(render_label(&c, false, None, None).0, "BCH, testnet");
+        // v15: the stripped "bchtest:" prefix echoes as the trailing slot.
+        assert_eq!(
+            render_label(&c, false, None, None, None).0,
+            "BCH, testnet, bchtest:"
+        );
     }
 
     #[test]
     fn label_truncation_marker_and_bottom_strip() {
         // Truncated (>512-bit) prepends the loud marker; the renderer splits it.
         let big = ch(&"a".repeat(400));
-        let (top, bottom) = render_label(&big, true, None, None);
-        assert!(top.starts_with(TRUNC_MARKER));
+        let (top, bottom) = render_label(&big, true, None, None, None);
+        assert!(top.starts_with(TRUNC_MARKER)); // v15 marker "+hash "
         assert_eq!(bottom, "");
         // Bottom strip: suffix only, note only, and both.
         let c = ch("0123456789abcdef0123456789abcdef");
-        assert_eq!(render_label(&c, false, Some("vfNa"), None).1, "...vfNa");
-        assert_eq!(render_label(&c, false, None, Some("git")).1, "(git)");
+        assert_eq!(render_label(&c, false, Some("vfNa"), None, None).1, "...vfNa");
+        assert_eq!(render_label(&c, false, None, Some("git"), None).1, "(git)");
         assert_eq!(
-            render_label(&c, false, Some("12"), Some("hi")).1,
+            render_label(&c, false, Some("12"), Some("hi"), None).1,
             "...12 (hi)"
         );
         // Empty suffix / empty note collapse to nothing.
-        assert_eq!(render_label(&c, false, Some(""), Some("")).1, "");
+        assert_eq!(render_label(&c, false, Some(""), Some(""), None).1, "");
     }
 }

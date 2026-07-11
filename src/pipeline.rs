@@ -19,6 +19,13 @@ const DPI: f64 = 96.0;
 const MARGIN: f64 = 1.0;
 const NOTE_MAX_LEN: usize = 10;
 const MAX_INPUT_CHARS: usize = 65536;
+// v15: fixed monospace advance (em) used to size the top strip's character
+// budget for prefix truncation. A spec constant — NOT the renderer's real font
+// metric — so all implementations compute the same integer budget and the
+// Tier-A label string is reproducible. 0.6 em is the conventional monospace
+// advance; the raster is unaffected (labels are excluded from the Tier-B
+// raster). See docs/spec.md -> "Label strips".
+const LABEL_ADVANCE_EM: f64 = 0.6;
 const MONOSPACE_FONT_FAMILY: &str = "\"JetBrains Mono\", \"Menlo\", \"Consolas\", \"DejaVu Sans Mono\", \"Liberation Mono\", \"Roboto Mono\", \"Noto Sans Mono\", monospace";
 
 #[derive(Debug)]
@@ -656,15 +663,24 @@ pub fn render(
     // labels — v14: the visible top/bottom strips are a pure projection of the
     // v13 entropy characterization through one grammar (render_label), NOT the
     // old per-parser type_name/prefix fusing. `characterization` is the same
-    // record already emitted as data-* attributes above; the styled
-    // `fingerprint of ` marker and the note tspan are applied structurally in
-    // draw_label_strips from the truncated/note flags. See docs/spec.md ->
-    // "Label strips" and reviews/v14-label-redesign.md.
+    // record already emitted as data-* attributes above; the styled `+hash`
+    // marker and the note tspan are applied structurally in draw_label_strips
+    // from the truncated/note flags. See docs/spec.md -> "Label strips".
+    //
+    // v15: the top strip gains a trailing slot echoing the stripped front
+    // prefix (0x, bc1, cosmos1, the SSH header, …). The prefix is the only
+    // elastic element and is truncated to the character budget the grid leaves
+    // on the label line: line_chars = floor(grid_width / (label_px *
+    // LABEL_ADVANCE_EM)). LABEL_ADVANCE_EM is a fixed spec constant (NOT the
+    // renderer's real font metric) so every implementation truncates
+    // identically and the Tier-A label string is reproducible.
+    let label_line_chars = ((grid_right - grid_left) / (label_text_px * LABEL_ADVANCE_EM)) as usize;
     let (top_text, _bottom_text) = crate::characterize::render_label(
         &characterization,
         is_truncated,
         suffix.as_deref(),
         note.as_deref(),
+        Some(label_line_chars),
     );
     draw_label_strips(
         &mut s,
@@ -1057,13 +1073,13 @@ fn draw_label_strips(
     let font_size_attr = format!("font-size=\"{}\"", n(text_px));
     let top_cy = grid_top - nucleus_h / 2.0;
     s.push_str("<g data-channel=\"label-top\">");
-    // v14: `top_text` is the render_label projection. When truncated it begins
-    // with the loud `fingerprint of ` marker, which is split back out here and
-    // rendered bold dark-red, with the projected label following in #666.
+    // v15: `top_text` is the render_label projection. When truncated it begins
+    // with the loud `+hash ` marker, which is split back out here and rendered
+    // bold dark-red, with the projected label following in #666.
     if truncated_bytes.is_some() {
         if let Some(rest) = top_text.strip_prefix(crate::characterize::TRUNC_MARKER) {
             s.push_str(&format!(
-                "<text x=\"{}\" y=\"{}\" fill=\"#666666\" {} dominant-baseline=\"central\"><tspan fill=\"#a00000\" font-weight=\"bold\">fingerprint of </tspan>{}</text>",
+                "<text x=\"{}\" y=\"{}\" fill=\"#666666\" {} dominant-baseline=\"central\"><tspan fill=\"#a00000\" font-weight=\"bold\">+hash </tspan>{}</text>",
                 n(grid_left),
                 n(top_cy),
                 font_size_attr,
@@ -1580,10 +1596,11 @@ mod tests {
 
     #[test]
     fn render_type_with_prefix_label() {
-        // v14: bare 0x-prefixed short hex is scheme=null -> `hex, <bits>`; the
-        // presentation prefix no longer appears in the projected label.
+        // v15: bare 0x-prefixed short hex is scheme=null -> `hex, <bits>`, and
+        // the stripped `0x` presentation prefix (parts[0].bind == "none") echoes
+        // as the trailing PREFIX slot. It is short, so it is not truncated.
         let svg = render("0xabcdef12", 1.0, 12.0, None).unwrap();
-        assert!(svg.contains(">hex, 32-bit</text>"), "svg: {svg}");
+        assert!(svg.contains(">hex, 32-bit, 0x</text>"), "svg: {svg}");
         assert!(!svg.contains("0x..."));
     }
 
@@ -1639,7 +1656,7 @@ mod tests {
         let svg = render(&core, 1.0, 12.0, None).unwrap();
         assert!(svg.contains("data-truncated=\"true\""));
         assert!(svg.contains("data-cell-fingerprint=\"true\""));
-        assert!(svg.contains("fingerprint of "));
+        assert!(svg.contains("+hash ")); // v15 marker (was "fingerprint of ")
     }
 
     #[test]

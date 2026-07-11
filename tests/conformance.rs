@@ -177,10 +177,11 @@ fn assert_labels_match(svg: &str, model: &Value, bad: &mut dyn FnMut(String)) {
             }
         }
     }
-    // truncation_marker: the model flags whether the bold `fingerprint of `
-    // marker is drawn; the SVG carries it as a leading tspan inside label-top.
+    // truncation_marker: the model flags whether the bold `+hash ` marker
+    // (v15; was `fingerprint of `) is drawn; the SVG carries it as a leading
+    // tspan inside label-top.
     let want_marker = labels["truncation_marker"].as_bool().unwrap_or(false);
-    let got_marker = svg.contains("font-weight=\"bold\">fingerprint of </tspan>");
+    let got_marker = svg.contains("font-weight=\"bold\">+hash </tspan>");
     if want_marker != got_marker {
         bad(format!(
             "truncation_marker={got_marker} but model={want_marker}"

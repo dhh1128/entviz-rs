@@ -69,7 +69,7 @@ fn map_markers_are_pinned() {
     );
 
     // A >512-bit input takes the truncation path and emits the bold #a00000
-    // "fingerprint of " marker.
+    // "+hash " marker (v15; was "fingerprint of ").
     let big_hex: String = "0123456789abcdef".repeat(16);
     let truncated = render(&big_hex, 1.0, 12.0, None).unwrap();
     assert!(
