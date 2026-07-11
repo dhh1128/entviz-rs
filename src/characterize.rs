@@ -509,7 +509,10 @@ fn fit_prefix(prefix: &str, avail: isize) -> String {
     if len <= avail {
         return prefix.to_string();
     }
-    let keep = std::cmp::max(avail - PREFIX_ELLIPSIS.len() as isize, PREFIX_MIN_HEAD as isize);
+    let keep = std::cmp::max(
+        avail - PREFIX_ELLIPSIS.len() as isize,
+        PREFIX_MIN_HEAD as isize,
+    );
     let keep = keep as usize;
     let head: String = prefix.chars().take(keep).collect();
     format!("{head}{PREFIX_ELLIPSIS}")
@@ -1196,7 +1199,10 @@ mod tests {
         // v15: schemes whose front prefix was stripped (bind="none") echo it as
         // a trailing slot — ETH/BTC/XRP show "0x"/"1"/"r"; UUID/LEI/snowflake
         // have no stripped prefix (parts[0].bind is "core") so no slot.
-        assert_eq!(top_of("0x742d35cc6634c0532925a3b844bc454e4438f44e"), "ETH, 0x");
+        assert_eq!(
+            top_of("0x742d35cc6634c0532925a3b844bc454e4438f44e"),
+            "ETH, 0x"
+        );
         assert_eq!(top_of("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"), "BTC, 1");
         assert_eq!(top_of("550e8400-e29b-41d4-a716-446655440000"), "UUID");
         assert_eq!(top_of("5493001KJTIIGC8Y1R12"), "LEI");
@@ -1284,7 +1290,10 @@ mod tests {
         assert_eq!(bottom, "");
         // Bottom strip: suffix only, note only, and both.
         let c = ch("0123456789abcdef0123456789abcdef");
-        assert_eq!(render_label(&c, false, Some("vfNa"), None, None).1, "...vfNa");
+        assert_eq!(
+            render_label(&c, false, Some("vfNa"), None, None).1,
+            "...vfNa"
+        );
         assert_eq!(render_label(&c, false, None, Some("git"), None).1, "(git)");
         assert_eq!(
             render_label(&c, false, Some("12"), Some("hi"), None).1,
