@@ -1,4 +1,4 @@
-//! Render-model computation (spec v10) — the abstract Tier-A structure an
+//! Render-model computation — the abstract Tier-A structure an
 //! implementation must compute prior to SVG serialization. This mirrors the
 //! Python reference's `model.json` (golden conformance corpus) field-for-field
 //! for **short inputs** (normalized core ≤ 64 bytes / ≤ 512 bits).
@@ -16,10 +16,8 @@ use crate::util::{assign_cell_indices, band_letter, two_bit_counts};
 use crate::{
     choose_grid, closest_palette_color, compute_fingerprint, median_token, nucleus_colors,
     quartile_tokens, second_digest, select_visual_style, tokenize, tokenize_fingerprint, Alphabet,
-    Grid, Token,
+    Grid, Token, SPEC_VERSION,
 };
-
-pub const SPEC_VERSION_V10: &str = "v10";
 
 /// Build the 20 renumbered tokens for a large (>512-bit) input: 8 head tokens
 /// (first `8·token_len` chars of `core`), 4 middle tokens (each a Crockford-5
@@ -73,7 +71,7 @@ fn fg_for_bg(bg_hex: &str) -> String {
 }
 
 /// Index of a palette hex color in [`POSSIBLE_EDGE_COLORS`] (0..=4), or 255 if
-/// it is not a palette color. Used to store the v10 color-singleton channels
+/// it is not a palette color. Used to store the color-singleton channels
 /// (fingerprint-edge + blank-fill colors) compactly.
 fn palette_idx(hex: &str) -> u8 {
     crate::POSSIBLE_EDGE_COLORS
@@ -102,11 +100,11 @@ pub struct CellModel {
     // Map fields (only on the single blank_map cell):
     pub map_min: Option<(usize, usize)>, // (row, col) of minftok cell (blue dot)
     pub map_max: Option<(usize, usize)>, // (row, col) of maxftok cell (red plus)
-    // v10 casual-salience channels (NOT part of the Tier-A model.json / oracle —
+    // Casual-salience channels (NOT part of the Tier-A model.json / oracle —
     // excluded from `to_golden_json` — but load-bearing for the color-field
     // attack persona). `fp_edge`: this filled cell is a fingerprint-edge cell
     // (its `edge_color` is fingerprint-driven, not the nucleus echo).
-    // `blank_fill`: POSSIBLE_EDGE_COLORS index of this blank cell's v10 pill fill.
+    // `blank_fill`: POSSIBLE_EDGE_COLORS index of this blank cell's pill fill.
     pub fp_edge: bool,
     pub blank_fill: Option<u8>,
 }
@@ -251,7 +249,7 @@ fn core_byte_length(core: &str, alphabet: &Alphabet) -> usize {
     }
 }
 
-/// v9 first-appearance order of the 4 patterns across the 256 slices.
+/// First-appearance order of the 4 patterns across the 256 slices.
 /// Returns pattern values (0..3) ordered by (first-appearance index, value).
 fn first_appearance_order(digest: &[u8; 64]) -> [usize; 4] {
     let mut first = [usize::MAX; 4];
@@ -295,7 +293,7 @@ fn external_corners(grid: &Grid, left: f64, top: f64, cw: f64, ch: f64) -> Vec<(
     pts
 }
 
-/// Compute the v9 render model for a normalized core string and its declared
+/// Compute the render model for a normalized core string and its declared
 /// alphabet. `bottom_strip` = whether a suffix or user note adds a bottom label
 /// band (affects bounding height → marker slot count `K`). For a bare hex/b64
 /// input it is `false`.
@@ -339,7 +337,7 @@ pub fn compute_render_model_fp(
     }
     let token_len = (24 / alphabet.bits_per_char) as usize;
     let est_token_count = core.chars().count().div_ceil(token_len); // ceil
-                                                                    // v6 large-input trigger: >512 bits (>64 bytes) OR >22 tokens. The large
+                                                                    // Large-input trigger: >512 bits (>64 bytes) OR >22 tokens. The large
                                                                     // path renders 8 head + 4 fingerprint-middle + 8 tail tokens (20 total).
     let is_truncated = est_token_count > 22 || core_byte_length(core, alphabet) > 64;
 
@@ -392,7 +390,7 @@ pub fn compute_render_model_fp(
         font_pt
     };
     let text_size_px = text_pt * 96.0 / 72.0;
-    // The v9 fingerprint-middle cells always render 5 Crockford chars, so they
+    // The fingerprint-middle cells always render 5 Crockford chars, so they
     // use the 5-char (0.80×) size regardless of the input alphabet (round-to-even
     // to match Python's `round`). Only consulted on large inputs.
     let fp_middle_text_px = (font_pt * 0.80).round_ties_even() * 96.0 / 72.0;
@@ -443,11 +441,11 @@ pub fn compute_render_model_fp(
 
     let edge_palette: Vec<&str> = style.edge_colors.iter().map(|s| s.as_str()).collect();
 
-    // v10 fingerprint-edge cells: the top-left cell (grid position 0, when used)
+    // Fingerprint-edge cells: the top-left cell (grid position 0, when used)
     // and the cells of the 1st & 2nd quartile ftoks take their surround edge
     // color from the fingerprint (2 low-order ftok-quant bits → edge palette)
     // instead of the nearest-palette nucleus echo, so the surround color
-    // avalanches to a casual glance. See pipeline.py (v10 casual-avalanche).
+    // avalanches to a casual glance. See pipeline.py (casual-avalanche).
     let mut fp_edge_cells: std::collections::HashSet<usize> = std::collections::HashSet::new();
     if used_cells.contains(&0) {
         fp_edge_cells.insert(0);
@@ -456,11 +454,11 @@ pub fn compute_render_model_fp(
         fp_edge_cells.insert(cell_of_token[qt.index]);
     }
 
-    // v10 hybrid blank fill (render-only in the Python ref; ported here for the
+    // Hybrid blank fill (render-only in the Python ref; ported here for the
     // color-field persona). Every non-map blank is fingerprint-filled; the map
     // blank is fingerprint-filled ONLY when it is the sole blank, else it keeps
     // the white/gold anchor. Filled blanks are enumerated in cell-index order;
-    // the j-th takes edge_palette[primary[32 + j] & 0b11]. See pipeline.py v10.
+    // the j-th takes edge_palette[primary[32 + j] & 0b11]. See pipeline.py.
     let sole_blank = blank_indices.len() == 1;
     let anchor_idx = if style.bg_color == "#ffffff" {
         1u8
@@ -487,7 +485,7 @@ pub fn compute_render_model_fp(
         let row = ci / grid.cols;
         if let Some(&t_idx) = token_of_cell.get(&ci) {
             let token = &tokens[t_idx];
-            // v6 fingerprint-middle cells (large inputs, token indices 8..=11):
+            // Fingerprint-middle cells (large inputs, token indices 8..=11):
             // neutral entviz-bg nucleus (no entropy in the bg), gold/white frame,
             // 0.80× Crockford text — surround stays ftok-driven.
             let is_fp_middle = is_truncated && (8..=11).contains(&token.index);
@@ -499,7 +497,7 @@ pub fn compute_render_model_fp(
                 let (bg, fg) = nucleus_colors(token.quant);
                 (bg, fg, text_size_px)
             };
-            // v10: a fingerprint-edge cell overrides the nucleus echo with the
+            // A fingerprint-edge cell overrides the nucleus echo with the
             // ftok-driven palette color; otherwise the edge is the nearest
             // palette color to the (possibly neutralized) nucleus bg.
             let edge = if fp_edge_cells.contains(&ci) {
@@ -579,7 +577,7 @@ pub fn compute_render_model_fp(
         })
         .collect();
 
-    // --- color-bar markers (v9) ---
+    // --- color-bar markers ---
     let bar_height = bounding_h - 2.0;
     let k = ((bar_height / 12.0).floor() as i64).clamp(4, 16) as usize;
     let markers = Markers {
@@ -634,7 +632,13 @@ pub fn compute_render_model_fp(
     let input_bytes = raw_bytes;
 
     Ok(RenderModel {
-        spec_version: SPEC_VERSION_V10.to_string(),
+        // Stamps the emitted spec version so the golden `model.json`'s
+        // `spec_version` (recovered from the SVG's `data-entviz-version`) and
+        // this render-model layer stay in lockstep across spec bumps — the
+        // differential harness diffs this field. Tracks `crate::SPEC_VERSION`;
+        // do NOT hardcode a literal here (that is exactly the drift that made
+        // this read "v10" while the spec advanced to v15).
+        spec_version: SPEC_VERSION.to_string(),
         cols: grid.cols,
         rows: grid.rows,
         bg_color: style.bg_color,
@@ -659,9 +663,9 @@ pub fn compute_render_model_fp(
 /// [`compute_render_model`] by the `channels_agree_with_model` test.
 ///
 /// NOT yet modeled here (deliberately, until a persona needs them): the per-cell
-/// nucleus/edge field and the v10 blank-cell fills. The fingerprint-edge cells'
+/// nucleus/edge field and the blank-cell fills. The fingerprint-edge cells'
 /// colors and the blank fills are casually salient (that is the whole point of
-/// v10), so a persona that checks "the field of cell colors" will need them
+/// the color-singleton design), so a persona that checks "the field of cell colors" will need them
 /// added — see entviz-adversarial/STATE.md.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Channels {
@@ -781,7 +785,7 @@ pub fn channels(
     }
 }
 
-/// The v10 casual-salience COLOR singletons — the channels v10 added so a one-
+/// The casual-salience COLOR singletons — the channels that make a one-
 /// character change pops to a glance. The fingerprint-edge cell colors are also
 /// in the Tier-A model (hence oracle-certified via `edge_color`); the blank-cell
 /// fills are render-only there, so this is the only place they are computed (the
@@ -796,7 +800,7 @@ pub struct ColorField {
     pub blank_fill: Vec<(usize, u8)>,
 }
 
-/// Compute the v10 color-singleton field for a core (see [`ColorField`]). Built
+/// Compute the color-singleton field for a core (see [`ColorField`]). Built
 /// from the full render model, so it carries the cell LAYOUT (positions) the
 /// gestalt [`channels`] omits — a color-field forgery must reproduce both the
 /// colors and where they sit. Panics only on an empty core.
@@ -840,7 +844,7 @@ pub fn color_field(
 /// The per-cell FRAME color, in cell-index order (cell 0 = top-left, the first-
 /// fixation point). For a filled cell this is its surround/edge palette color —
 /// the nucleus color quantized to the palette (and fingerprint-driven on the
-/// v10 fingerprint-edge cells); for a blank cell it is the v10 pill-fill color.
+/// fingerprint-edge cells); for a blank cell it is the pill-fill color.
 /// Values are [`POSSIBLE_EDGE_COLORS`] indices (0..=4). This is the discrete
 /// proxy for "the broad field of cell colors" a casual glance reads — the
 /// attacker-side channel for the anchored color-field persona.
@@ -891,7 +895,11 @@ mod tests {
         assert_eq!(m.bg_color, "#2f3fbf"); // blue
         assert_eq!(m.input_bytes, 64);
         assert!(!m.truncated);
-        assert_eq!(m.spec_version, "v10");
+        // The render-model layer stamps the emitted spec version, which must
+        // equal what the golden model.json carries (recovered from the SVG's
+        // data-entviz-version). It tracks the crate-wide SPEC_VERSION rather
+        // than a literal, so a spec bump can't leave it stale.
+        assert_eq!(m.spec_version, crate::SPEC_VERSION);
     }
 
     #[test]
@@ -901,8 +909,8 @@ mod tests {
         assert_eq!(c0.text.as_deref(), Some("012345"));
         assert_eq!(c0.nucleus_bg.as_deref(), Some("#452301"));
         assert_eq!(c0.fg.as_deref(), Some("#ffffff"));
-        // v10: cell 0 is the top-left fingerprint-edge cell, so its edge is the
-        // ftok-driven palette color (#e7be00), not the v9 nucleus echo (#000000).
+        // Cell 0 is the top-left fingerprint-edge cell, so its edge is the
+        // ftok-driven palette color (#e7be00), not the nucleus echo (#000000).
         assert_eq!(c0.edge_color.as_deref(), Some("#e7be00"));
         assert_eq!(c0.surround_bits, Some(11348353));
         assert_eq!(c0.quartile, Some(2));
@@ -910,8 +918,8 @@ mod tests {
 
         let c1 = &m.cells[1];
         assert_eq!(c1.nucleus_bg.as_deref(), Some("#ab8967"));
-        // cell 1 is the 1st-quartile fingerprint-edge cell (v10); its ftok-driven
-        // palette color coincides with the v9 nucleus echo here.
+        // Cell 1 is the 1st-quartile fingerprint-edge cell; its ftok-driven
+        // palette color coincides with the nucleus echo here.
         assert_eq!(c1.edge_color.as_deref(), Some("#ff3f2f"));
         assert_eq!(c1.quartile, Some(1));
     }
@@ -958,7 +966,7 @@ mod tests {
     #[test]
     fn color_field_hex256() {
         // hex-256, blue bg. fp-edge cells = top-left (0) + 1st/2nd quartile cells
-        // (1 and 0), so {0, 1}; their v10 edge colors are gold(#e7be00 → idx1)
+        // (1 and 0), so {0, 1}; their edge colors are gold(#e7be00 → idx1)
         // on cell 0 and red(#ff3f2f → idx2) on cell 1. One blank (cell 7) which
         // is the sole blank → fingerprint-filled; its color is from the blue
         // edge palette {white0, gold1, red2, black4} (never blue=3).
@@ -1059,7 +1067,7 @@ mod tests {
         let c0 = &m.cells[0];
         assert_eq!(c0.text.as_deref(), Some("aGVs"));
         assert_eq!(c0.nucleus_bg.as_deref(), Some("#6c6568"));
-        // v10: top-left fingerprint-edge cell → ftok-driven palette color.
+        // Top-left fingerprint-edge cell → ftok-driven palette color.
         assert_eq!(c0.edge_color.as_deref(), Some("#000000"));
         assert_eq!(c0.surround_bits, Some(3731819));
         assert_eq!(c0.quartile, Some(3));

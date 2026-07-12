@@ -1,6 +1,7 @@
-//! entviz — Rust reference port (spec v15).
+//! entviz — Rust reference port. The spec version it targets and emits is
+//! [`SPEC_VERSION`].
 //!
-//! **STATUS: CERTIFIED v15.** This crate is a full, self-contained entviz
+//! This crate is a full, self-contained entviz
 //! implementation: the deterministic shared core (tokenization + quant
 //! extension, the SHA-512 fingerprint, ftok median/quartile selection, the
 //! Oklab color rules, grid selection), the format-specific parsers
@@ -164,7 +165,7 @@ pub fn tokenize_fingerprint(digest: &[u8; 64]) -> Vec<Token> {
 /// match the spec version; treat it as a frozen magic constant.
 pub const MIDDLE_DOMAIN_TAG: &[u8] = b"entviz/fingerprint-middle/v6\x00";
 
-/// `second = SHA-512(DOMAIN_TAG ‖ core)`. Computed for every input (v9): drives
+/// `second = SHA-512(DOMAIN_TAG ‖ core)`. Computed for every input; drives
 /// the two color-bar markers on all inputs (and the middle cells on large ones).
 /// A legitimate part of the renderer — not adversarial tooling.
 pub fn second_digest(core: &str) -> [u8; 64] {

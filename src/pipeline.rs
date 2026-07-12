@@ -1,4 +1,4 @@
-//! Full render pipeline: entropy string → SVG string (spec v10).
+//! Full render pipeline: entropy string → SVG string.
 //!
 //! Faithful port of `src/entviz/pipeline.py` + `renderer.py` + `shapes.py`.
 //! Produces an SVG whose normative `data-*` attributes and geometry let the
@@ -15,11 +15,11 @@ use crate::{
 
 const DPI: f64 = 96.0;
 // Transparent quiet-margin ring (user units) on all four sides of the canvas so
-// the gray frame never sits on the canvas edge (issue #31, spec v12).
+// the gray frame never sits on the canvas edge (issue #31).
 const MARGIN: f64 = 1.0;
 const NOTE_MAX_LEN: usize = 10;
 const MAX_INPUT_CHARS: usize = 65536;
-// v15: fixed monospace advance (em) used to size the top strip's character
+// Fixed monospace advance (em) used to size the top strip's character
 // budget for prefix truncation. A spec constant — NOT the renderer's real font
 // metric — so all implementations compute the same integer budget and the
 // Tier-A label string is reproducible. 0.6 em is the conventional monospace
@@ -44,7 +44,7 @@ pub enum RenderError {
         position: usize,
     },
     /// A bound checksum was surfaced (base58check / bech32 / CashAddr / LEI) but
-    /// did not verify (spec v14). The variant identifies which scheme's checksum
+    /// did not verify. The variant identifies which scheme's checksum
     /// failed; the input is rejected rather than rendered with a bad checksum.
     Base58Check,
     Bech32Checksum,
@@ -147,7 +147,7 @@ fn n(x: f64) -> String {
     s
 }
 
-/// Build the eight spec-v13 characterization `data-*` attributes for the root
+/// Build the eight structured-characterization `data-*` attributes for the root
 /// `<svg>`. Order + form mirror the reference exactly:
 /// `data-encoding data-scheme data-role data-size-basis data-entropy-type
 /// data-size-bits data-qualifiers data-parts`. `scheme`/`role` emit the EMPTY
@@ -189,14 +189,14 @@ pub fn render(
     }
 
     let raw_input = entropy_text.trim().to_string();
-    // Structured entropy characterization (spec v13). Reporting-only: emitted as
+    // Structured entropy characterization. Reporting-only: emitted as
     // data-* attributes on the root <svg>; it feeds no pixel, no fingerprint, and
     // (critically) size_bits is NOT the >512-bit truncation basis — truncation
     // stays keyed off the tokenizer byte-length test below.
     let characterization = crate::characterize::characterize(&raw_input)?;
     let parsed = entropy::parse(&raw_input)?;
 
-    // v14: the visible label is a projection of the characterization
+    // The visible label is a projection of the characterization
     // (render_label), so the parser's `type_name` no longer feeds the label and
     // is not retained here. `prefix`/`suffix`/`prefix_semantic` still drive the
     // fingerprint-fold and the bottom-strip suffix.
@@ -274,7 +274,9 @@ pub fn render(
     let cell_count = grid.cols * grid.rows;
     let used_cells: std::collections::HashSet<usize> = cell_indices.iter().copied().collect();
 
-    // --- per-cell text sizes ---
+    // --- cell text sizes (keyed on the input alphabet, applied to every
+    // cell of it including a short final token; the Crockford middle cells
+    // are sized from their own 5-char alphabet below) ---
     let cell_text_pt = if alphabet.bits_per_char == 4 {
         (font_size_pt * 0.75).round_ties_even()
     } else {
@@ -284,7 +286,7 @@ pub fn render(
     let label_text_px = (font_size_pt * 0.75).round_ties_even() * DPI / 72.0;
     let fp_middle_text_px = (font_size_pt * 0.80).round_ties_even() * DPI / 72.0;
 
-    // --- fingerprint-edge cells (v10) ---
+    // --- fingerprint-edge cells ---
     let mut fp_edge_cells: std::collections::HashSet<usize> = std::collections::HashSet::new();
     if used_cells.contains(&0) {
         fp_edge_cells.insert(0);
@@ -343,7 +345,7 @@ pub fn render(
     ));
 
     // bounding white background — fill only the inner field, leaving the
-    // MARGIN quiet ring transparent (issue #31, spec v12).
+    // MARGIN quiet ring transparent (issue #31).
     s.push_str(&format!(
         "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"#ffffff\"/>",
         n(MARGIN),
@@ -363,7 +365,7 @@ pub fn render(
         esc_attr(&style.bg_color)
     ));
 
-    // Layer 1: surround edges. v10: a filled cell's 24-bit surround pattern is
+    // Layer 1: surround edges. A filled cell's 24-bit surround pattern is
     // emitted as ONE <path> (one subpath per set box) instead of one <rect> per
     // box. The bit pattern + edge color are DECLARED on the cell group below
     // (data-surround-bits / data-edge-color), so a checker recovers the channel
@@ -516,7 +518,7 @@ pub fn render(
         if let Some((q_idx, _)) = quartile_of_cell.get(&ci) {
             attrs.push_str(&format!(" data-cell-quartile=\"{}\"", q_idx + 1));
         }
-        // v10: a filled cell declares its surround channel here (hex bit pattern
+        // A filled cell declares its surround channel here (hex bit pattern
         // + edge color); the boxes themselves were drawn as a path in the
         // surround layer above. data-edge-color is omitted when no box is set
         // (edge color is then undefined, matching the render model).
@@ -660,14 +662,14 @@ pub fn render(
         cell_text_px,
     );
 
-    // labels — v14: the visible top/bottom strips are a pure projection of the
-    // v13 entropy characterization through one grammar (render_label), NOT the
+    // labels — the visible top/bottom strips are a pure projection of the
+    // entropy characterization through one grammar (render_label), NOT the
     // old per-parser type_name/prefix fusing. `characterization` is the same
     // record already emitted as data-* attributes above; the styled `+hash`
     // marker and the note tspan are applied structurally in draw_label_strips
     // from the truncated/note flags. See docs/spec.md -> "Label strips".
     //
-    // v15: the top strip gains a trailing slot echoing the stripped front
+    // The top strip carries a trailing slot echoing the stripped front
     // prefix (0x, bc1, cosmos1, the SSH header, …). The prefix is the only
     // elastic element and is truncated to the character budget the grid leaves
     // on the label line: line_chars = floor(grid_width / (label_px *
@@ -704,7 +706,7 @@ pub fn render(
         ));
     };
     // Frame inset by MARGIN; span endpoints MARGIN..(bounding-MARGIN) so corners
-    // stay double-painted (issue #31, spec v12).
+    // stay double-painted (issue #31).
     bl(
         &mut s,
         MARGIN,
@@ -1073,7 +1075,7 @@ fn draw_label_strips(
     let font_size_attr = format!("font-size=\"{}\"", n(text_px));
     let top_cy = grid_top - nucleus_h / 2.0;
     s.push_str("<g data-channel=\"label-top\">");
-    // v15: `top_text` is the render_label projection. When truncated it begins
+    // `top_text` is the render_label projection. When truncated it begins
     // with the loud `+hash ` marker, which is split back out here and rendered
     // bold dark-red, with the projected label following in #666.
     if truncated_bytes.is_some() {
@@ -1216,7 +1218,7 @@ mod tests {
 
     #[test]
     fn surround_declared_on_cell_and_path_subpaths_match_bits() {
-        // v10: each filled cell group declares data-surround-bits (parseable as
+        // Each filled cell group declares data-surround-bits (parseable as
         // hex) and, when bits != 0, data-edge-color. The surround paths draw
         // exactly one box ('M' subpath) per set bit; summed over all cells the
         // path subpath count must equal the total popcount of declared bits.
@@ -1581,7 +1583,7 @@ mod tests {
 
     #[test]
     fn render_b64url_detected_label() {
-        // v14: '-'/'_' force base64url; scheme=null projects to the encoding
+        // '-'/'_' force base64url; scheme=null projects to the encoding
         // short-name `b64url` plus a decoded SIZE. 8 chars * 6 bits = 48 bits.
         let svg = render("ABC-_DEF", 1.0, 12.0, None).unwrap();
         assert!(svg.contains(">b64url, 48-bit</text>"), "svg: {svg}");
@@ -1589,14 +1591,14 @@ mod tests {
 
     #[test]
     fn render_b64_detected_label() {
-        // v14: '+'/'/' force plain base64 -> PRIMARY `b64`, decoded 48-bit.
+        // '+'/'/' force plain base64 -> PRIMARY `b64`, decoded 48-bit.
         let svg = render("ABC+/DEF", 1.0, 12.0, None).unwrap();
         assert!(svg.contains(">b64, 48-bit</text>"), "svg: {svg}");
     }
 
     #[test]
     fn render_type_with_prefix_label() {
-        // v15: bare 0x-prefixed short hex is scheme=null -> `hex, <bits>`, and
+        // Bare 0x-prefixed short hex is scheme=null -> `hex, <bits>`, and
         // the stripped `0x` presentation prefix (parts[0].bind == "none") echoes
         // as the trailing PREFIX slot. It is short, so it is not truncated.
         let svg = render("0xabcdef12", 1.0, 12.0, None).unwrap();
@@ -1607,7 +1609,7 @@ mod tests {
     #[test]
     fn render_suffix_only_bottom_label() {
         // LEI has a suffix but no note -> the (suffix, None) bottom branch, and
-        // v14 projects the top to the bare scheme short-name `LEI`.
+        // the top projects to the bare scheme short-name `LEI`.
         let svg = render("5493001KJTIIGC8Y1R12", 1.0, 12.0, None).unwrap();
         assert!(svg.contains("...12"));
         assert!(svg.contains(">LEI</text>"), "svg: {svg}");
@@ -1616,14 +1618,14 @@ mod tests {
 
     #[test]
     fn render_text_fallback_label() {
-        // v14: plain text -> PRIMARY `text` with a utf8 byte SIZE.
+        // Plain text -> PRIMARY `text` with a utf8 byte SIZE.
         let svg = render("hello world", 1.0, 12.0, None).unwrap();
         assert!(svg.contains(">text, 11-byte</text>"), "svg: {svg}");
     }
 
     #[test]
     fn render_swhid_semantic_prefix_label() {
-        // v14: swhid projects to the self-describing PRIMARY `swh:1:<object>`,
+        // swhid projects to the self-describing PRIMARY `swh:1:<object>`,
         // no body echo and no trailing `...`.
         let svg = render(
             "swh:1:rev:309cf2674ee7a0749978cf8265ab91a60aea0f7d",
@@ -1656,7 +1658,7 @@ mod tests {
         let svg = render(&core, 1.0, 12.0, None).unwrap();
         assert!(svg.contains("data-truncated=\"true\""));
         assert!(svg.contains("data-cell-fingerprint=\"true\""));
-        assert!(svg.contains("+hash ")); // v15 marker (was "fingerprint of ")
+        assert!(svg.contains("+hash ")); // truncation marker (was "fingerprint of ")
     }
 
     #[test]

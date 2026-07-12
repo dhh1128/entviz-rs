@@ -72,7 +72,7 @@ fn main() {
         bits_per_char: bits,
     };
 
-    // `--colorfield`: print the v10 color-singleton field (bg + fingerprint-edge
+    // `--colorfield`: print the color-singleton field (bg + fingerprint-edge
     // + blank-fill colors, as hex) instead of the full model, for golden-SVG
     // validation of the blank-fill formula (the only color channel the Tier-A
     // oracle does not cover).

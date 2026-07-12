@@ -1,4 +1,4 @@
-//! Entropy characterization model (spec v13) + label projection (spec v14) —
+//! Entropy characterization model + label projection —
 //! port of `src/entviz/characterize.py`.
 //!
 //! The parser ([`crate::entropy`]) produces a [`Parsed`] display record whose
@@ -19,7 +19,7 @@
 use crate::entropy::{self, Parsed};
 use crate::Alphabet;
 
-// Closed role enum (spec v13). Nothing outside this set may appear.
+// Closed role enum. Nothing outside this set may appear.
 pub const ROLE_KEY: &str = "key";
 pub const ROLE_SIGNATURE: &str = "signature";
 pub const ROLE_DIGEST: &str = "digest";
@@ -74,7 +74,7 @@ pub struct Part {
     pub bind: &'static str,
 }
 
-/// The eight-field structured characterization (spec v13).
+/// The eight-field structured characterization.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Characterization {
     pub encoding: String,
@@ -400,7 +400,7 @@ fn parts_from_parsed(parsed: &Parsed) -> Vec<Part> {
     parts
 }
 
-/// Characterize an entropy string into the structured model (spec v13). Never
+/// Characterize an entropy string into the structured model. Never
 /// errors for an in-range input: an unrecognized input falls back to the
 /// UTF-8 -> base64url path (scheme=None, role=None, size_basis="utf8", size
 /// measured over the ORIGINAL input bytes). A hard parse error (EIP-55) is
@@ -447,7 +447,7 @@ pub fn characterize(entropy: &str) -> Result<Characterization, entropy::ParseErr
 }
 
 // ---------------------------------------------------------------------------
-// Label projection (spec v15).
+// Label projection.
 //
 // The visible top/bottom label strips are a PURE PROJECTION of the eight
 // characterization fields through one grammar — no per-parser string fusing.
@@ -462,7 +462,7 @@ pub fn characterize(entropy: &str) -> Result<Characterization, entropy::ParseErr
 // ---------------------------------------------------------------------------
 
 /// The `+hash ` marker prepended to the top strip for >512-bit truncated
-/// inputs (v15; was `fingerprint of `). The renderer splits it back out to
+/// inputs (was `fingerprint of `). The renderer splits it back out to
 /// style it bold dark-red. Read as "the value augmented with a hash of the
 /// parts that didn't fit" — the leading `+` is additive, not substitutive.
 /// Kept as the single source of truth for both the projection and the
@@ -497,7 +497,7 @@ fn stripped_prefix(ch: &Characterization) -> Option<&str> {
 }
 
 /// Truncate the literal prefix slot to `avail` characters with a trailing
-/// `...` elision marker. The prefix is the sole ELASTIC label element (v15):
+/// `...` elision marker. The prefix is the sole ELASTIC label element:
 /// PRIMARY/MOD/SIZE are never truncated. When the prefix does not fit, it is
 /// cut to `<head> + "..."`; the head length is floored at `PREFIX_MIN_HEAD` so
 /// a long prefix on a tight line (only SSH's structural header hits this) still
@@ -623,7 +623,7 @@ fn mods(ch: &Characterization) -> Vec<String> {
         }
         Some("ssh") => {
             if let Some(algo) = qval_str(q, "algorithm") {
-                // v15: shorten the ECDSA curve to its common short name for the
+                // Shorten the ECDSA curve to its common short name for the
                 // label — "ecdsa-nistp256" -> "ecdsa-p256" (there is no rival
                 // non-NIST "p256"; the algorithm word stays, only the redundant
                 // standards-body prefix drops). The data-qualifiers `algorithm`
@@ -680,12 +680,12 @@ fn size(ch: &Characterization) -> Option<String> {
     }
 }
 
-/// Project a characterization into the (top, bottom) label strips (v15).
+/// Project a characterization into the (top, bottom) label strips.
 ///
 /// * `top` = `[+hash ]PRIMARY[, MOD]...[, SIZE][, <prefix>]` — ", " joined,
 ///   no trailing `:`. The `+hash ` marker is prepended when `truncated`; the
 ///   renderer splits it back out to style it. The trailing `<prefix>` slot
-///   (v15) echoes a front prefix that was stripped from the visualized core (a
+///   Echoes a front prefix that was stripped from the visualized core (a
 ///   `bind="none"` leading part) so the reader can reconcile the pasted value
 ///   against the cells; it is the only slot that may be truncated and may then
 ///   end in `...`. Fold-prefix schemes (did/urn/gitoid/swhid) show their prefix
@@ -863,7 +863,7 @@ mod tests {
     }
 
     // ==================================================================
-    // Coverage completion (spec v13): exercise every reachable scheme arm,
+    // Coverage completion: exercise every reachable scheme arm,
     // both size_basis branches, both integer-decode paths, all bind modes,
     // and the JSON escape ladder — WITHOUT the reference corpus (these run
     // in CI's coverage job where ../entviz is intentionally absent).
@@ -938,7 +938,7 @@ mod tests {
     // ---- BTC legacy address (network + variant, base58 integer-decode) ----
     #[test]
     fn btc_legacy_is_address_mainnet_legacy() {
-        // v14: a real base58check-valid legacy address (synthetic ones now
+        // A real base58check-valid legacy address (synthetic ones now
         // reject on the checksum).
         let c = ch("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa");
         assert_eq!(c.scheme.as_deref(), Some("btc"));
@@ -970,7 +970,7 @@ mod tests {
         assert_eq!(m.role, Some(ROLE_ADDRESS));
         assert_eq!(m.qualifiers.to_json(), "{\"network\":\"mainnet\"}");
 
-        // v14: a real bchtest CashAddr (checksum computed under the bchtest hrp).
+        // A real bchtest CashAddr (checksum computed under the bchtest hrp).
         let t = ch("bchtest:qpur7lcrzhq247gvqs5n79hj0tz4edmdqg09nfandy");
         assert_eq!(t.scheme.as_deref(), Some("bch"));
         assert_eq!(t.qualifiers.to_json(), "{\"network\":\"testnet\"}");
@@ -979,7 +979,7 @@ mod tests {
     // ---- LTC legacy variant branch (lines 289-294) ----
     #[test]
     fn ltc_legacy_is_address_with_legacy_variant() {
-        // v14: a real base58check-valid Litecoin legacy address.
+        // A real base58check-valid Litecoin legacy address.
         let c = ch("LKDyUEtTR1HXamkiEphisSiBJu6o3ZPE34");
         assert_eq!(c.scheme.as_deref(), Some("ltc"));
         assert_eq!(c.role, Some(ROLE_ADDRESS));
@@ -1166,7 +1166,7 @@ mod tests {
     }
 
     // ==================================================================
-    // v14 label projection (render_label) — corpus-independent unit tests
+    // Label projection (render_label) — corpus-independent unit tests
     // covering every grammar arm (PRIMARY / MOD / SIZE, bottom strip, marker),
     // so the projection is exercised in the coverage job (no ../entviz corpus).
     // Values match the reviews/v14-label-redesign.md before->after table.
@@ -1196,7 +1196,7 @@ mod tests {
 
     #[test]
     fn label_scheme_short_names_omit_size() {
-        // v15: schemes whose front prefix was stripped (bind="none") echo it as
+        // Schemes whose front prefix was stripped (bind="none") echo it as
         // a trailing slot — ETH/BTC/XRP show "0x"/"1"/"r"; UUID/LEI/snowflake
         // have no stripped prefix (parts[0].bind is "core") so no slot.
         assert_eq!(
@@ -1250,7 +1250,7 @@ mod tests {
     #[test]
     fn label_cid_and_ssh_and_multihash_mods_and_size() {
         // CIDv0 -> no MOD; CIDv1 -> codec MOD; SSH -> algorithm MOD + bit SIZE.
-        // v15: each echoes its stripped front prefix as a trailing slot (Qm / b
+        // Each echoes its stripped front prefix as a trailing slot (Qm / b
         // / the SSH structural header). top_of passes no line budget, so the SSH
         // header shows in full (truncation is exercised via the pipeline).
         assert_eq!(
@@ -1274,7 +1274,7 @@ mod tests {
         // A testnet BCH shows the loud "testnet" MOD; the legacy/segwit variant
         // is dropped, and mainnet stays silent (btc above shows bare "BTC").
         let c = ch("bchtest:qpur7lcrzhq247gvqs5n79hj0tz4edmdqg09nfandy");
-        // v15: the stripped "bchtest:" prefix echoes as the trailing slot.
+        // The stripped "bchtest:" prefix echoes as the trailing slot.
         assert_eq!(
             render_label(&c, false, None, None, None).0,
             "BCH, testnet, bchtest:"
@@ -1286,7 +1286,7 @@ mod tests {
         // Truncated (>512-bit) prepends the loud marker; the renderer splits it.
         let big = ch(&"a".repeat(400));
         let (top, bottom) = render_label(&big, true, None, None, None);
-        assert!(top.starts_with(TRUNC_MARKER)); // v15 marker "+hash "
+        assert!(top.starts_with(TRUNC_MARKER)); // truncation marker "+hash "
         assert_eq!(bottom, "");
         // Bottom strip: suffix only, note only, and both.
         let c = ch("0123456789abcdef0123456789abcdef");
