@@ -1,6 +1,6 @@
 [package]
 name = "entviz"
-version = "0.15.0"
+version = "0.15.1"
 edition = "2021"
 # Minimum supported Rust version. Floor is set by the highest-versioned stable
 # stdlib item used: usize::is_multiple_of (src/entropy.rs), stabilized in Rust
