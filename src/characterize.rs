@@ -189,18 +189,28 @@ fn size_bits(core: &str, alphabet: &Alphabet, size_basis: &str) -> usize {
 }
 
 // CESR derivation-code role classification, keyed off the decoded primitive
-// name the parser puts in `type` ("CESR <name>").
-fn cesr_role(name: &str) -> &'static str {
+// name the parser puts in `type` ("CESR <name>"). Returns None for recognized
+// primitives that carry NO role in the closed enum {key, signature, digest,
+// address, identifier}: a Dater ("datetime") is a low-entropy, directly
+// human-readable temporal value — recognized only to LABEL it correctly (not
+// `raw`), NOT to endorse visualizing it as entropy. It MUST short-circuit to
+// None here rather than fall through to the ROLE_KEY default. (Checked before
+// the sig/digest markers so a future temporal primitive whose name happened to
+// contain one of those substrings stays role-less.) See this.i:idxs1gs0.
+fn cesr_role(name: &str) -> Option<&'static str> {
     let low = name.to_lowercase();
+    if low.contains("datetime") {
+        return None;
+    }
     if low.contains("sig") {
-        return ROLE_SIGNATURE;
+        return Some(ROLE_SIGNATURE);
     }
     for m in ["blake3", "blake2b", "blake2s", "sha3", "sha2", "sha"] {
         if low.contains(m) {
-            return ROLE_DIGEST;
+            return Some(ROLE_DIGEST);
         }
     }
-    ROLE_KEY
+    Some(ROLE_KEY)
 }
 
 /// Return (scheme, role, qualifiers, size_basis) for a Parsed record. Mirrors
@@ -256,7 +266,7 @@ fn describe_from_parsed(
     // --- CESR primitives: "CESR <decoded-name>" ---
     if let Some(name) = type_name.strip_prefix("CESR ") {
         q.push_str("algorithm", name);
-        return (Some("cesr".into()), Some(cesr_role(name)), q, "decoded");
+        return (Some("cesr".into()), cesr_role(name), q, "decoded");
     }
 
     // --- SSH public keys: "SSH <algorithm>" or "SSH key" ---
@@ -889,6 +899,46 @@ mod tests {
         assert_eq!(c.scheme.as_deref(), Some("cesr"));
         assert_eq!(c.role, Some(ROLE_SIGNATURE));
         assert_eq!(c.qualifiers.to_json(), "{\"algorithm\":\"Ed25519 sig\"}");
+    }
+
+    // ---- Issue #36: CESR Indexer (indexed sigs) + Dater (datetime) ----
+    // Vectors from keripy 1.1.33 (Siger/Dater); see this.i:idxs1gs0.
+    const ISSUE36_INDEXED_SIG: &str =
+        "ABCfhtCBiEx9ZZov6qDFWtAVn4bQgYhMfWWaL-qgxVrQFZ-G0IGITH1lmi_qoMVa0BWfhtCBiEx9ZZov6qDFWtAV";
+    const ISSUE36_DATER: &str = "1AAG2020-08-22T17c50c09d988921p00c00";
+
+    #[test]
+    fn issue36_indexed_sig_role_is_signature() {
+        let c = ch(ISSUE36_INDEXED_SIG);
+        assert_eq!(c.scheme.as_deref(), Some("cesr"));
+        assert_eq!(c.role, Some(ROLE_SIGNATURE));
+        assert_eq!(
+            c.qualifiers.to_json(),
+            "{\"algorithm\":\"Ed25519 idx sig\"}"
+        );
+    }
+
+    #[test]
+    fn issue36_indexed_sig_label_projection() {
+        // Top strip reads "CESR, <algo> idx sig"; there is no " pubkey" to strip.
+        let (top, _bottom) = render_label(&ch(ISSUE36_INDEXED_SIG), false, None, None, None);
+        assert_eq!(top, "CESR, Ed25519 idx sig");
+    }
+
+    #[test]
+    fn issue36_dater_role_is_none_not_key() {
+        let c = ch(ISSUE36_DATER);
+        assert_eq!(c.scheme.as_deref(), Some("cesr"));
+        // A datetime is recognized but carries NO closed-enum role — it MUST NOT
+        // default to "key" (the reason we special-case it).
+        assert!(c.role.is_none());
+        assert_eq!(c.qualifiers.to_json(), "{\"algorithm\":\"datetime\"}");
+    }
+
+    #[test]
+    fn issue36_dater_label_projection() {
+        let (top, _bottom) = render_label(&ch(ISSUE36_DATER), false, None, None, None);
+        assert_eq!(top, "CESR, datetime");
     }
 
     // ---- SSH bare key (SSH key -> role key, no algorithm qualifier) ----

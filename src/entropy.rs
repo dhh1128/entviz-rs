@@ -179,27 +179,85 @@ fn parse_cesr(text: &str) -> PResult {
         ("1AAJ", "secp256r1 pub/enc key", 48),
         ("1AAR", "FN-DSA-512 sig", 892),
         ("1AAQ", "FN-DSA-512 pubkey", 1200),
+        // Dater (MtrDex.DateTime): an ISO-8601 datetime with `:`->`c`, `.`->`d`,
+        // `+`->`p` substitutions, so the whole qb64 is base64url. Recognized only
+        // to LABEL it correctly (not `raw`); a datetime is low-entropy and
+        // directly human-readable, so `characterize` assigns it NO role (see
+        // this.i:idxs1gs0). It is a Matter code with a fixed 4-char prefix +
+        // fixed size, so it fits this flat table with no special path.
+        ("1AAG", "datetime", 36),
+    ];
+    // CESR Indexer code table (keri.core.coring.IdrDex) — the indexed signatures
+    // a KEL carries (controller/witness sigs). STRUCTURALLY DIFFERENT from the
+    // Matter tables above: each qb64 is `hard-code + index + material`, so the
+    // characters AFTER the hard code vary with the signature's index and CANNOT
+    // be matched as a fixed leading substring. Recognition keys on (hard-code,
+    // full-size `fs`) ONLY; the index chars stay in the core like any other body
+    // chars (and so still drive the cells and the fingerprint). Every variant of
+    // one algorithm — current-only ("Crt"), "Big" (2-char hard code, wider
+    // index) — collapses to a single label. Ported wholesale from keripy's
+    // IdrDex. Matter-vs-Indexer is decided by (code, length), never by leading
+    // char alone: `A` is a Matter seed at 44 but an Indexer sig at 88, `0A`/`0B`
+    // are Matter codes at 24/88 but Ed448 indexer sigs at 156. parse_cesr tries
+    // Matter first, then this table. See issue #36, this.i:idxs1gs0.
+    // (hard_code, label, fs)
+    const INDEXER: &[(&str, &str, usize)] = &[
+        ("A", "Ed25519 idx sig", 88),    // Ed25519_Sig
+        ("B", "Ed25519 idx sig", 88),    // Ed25519_Crt_Sig
+        ("C", "secp256k1 idx sig", 88),  // ECDSA_256k1_Sig
+        ("D", "secp256k1 idx sig", 88),  // ECDSA_256k1_Crt_Sig
+        ("E", "secp256r1 idx sig", 88),  // ECDSA_256r1_Sig
+        ("F", "secp256r1 idx sig", 88),  // ECDSA_256r1_Crt_Sig
+        ("0A", "Ed448 idx sig", 156),    // Ed448_Sig
+        ("0B", "Ed448 idx sig", 156),    // Ed448_Crt_Sig
+        ("2A", "Ed25519 idx sig", 92),   // Ed25519_Big_Sig
+        ("2B", "Ed25519 idx sig", 92),   // Ed25519_Big_Crt_Sig
+        ("2C", "secp256k1 idx sig", 92), // ECDSA_256k1_Big_Sig
+        ("2D", "secp256k1 idx sig", 92), // ECDSA_256k1_Big_Crt_Sig
+        ("2E", "secp256r1 idx sig", 92), // ECDSA_256r1_Big_Sig
+        ("2F", "secp256r1 idx sig", 92), // ECDSA_256r1_Big_Crt_Sig
+        ("3A", "Ed448 idx sig", 160),    // Ed448_Big_Sig
+        ("3B", "Ed448 idx sig", 160),    // Ed448_Big_Crt_Sig
     ];
     if text.is_empty() {
         return Ok(None);
     }
     let len = text.chars().count();
     let first = text.chars().next().unwrap();
-    let items: &[(&str, &str, usize)] = match first {
-        '0' if TWO.iter().any(|x| x.2 == len) => TWO,
-        '1' if FOUR.iter().any(|x| x.2 == len) => FOUR,
-        c if c != '0' && c != '1' && ONE.iter().any(|x| x.2 == len) => ONE,
-        _ => return Ok(None),
+    let items: Option<&[(&str, &str, usize)]> = match first {
+        '0' if TWO.iter().any(|x| x.2 == len) => Some(TWO),
+        '1' if FOUR.iter().any(|x| x.2 == len) => Some(FOUR),
+        c if c != '0' && c != '1' && ONE.iter().any(|x| x.2 == len) => Some(ONE),
+        _ => None,
     };
-    for &(code, label, total) in items {
-        if text.starts_with(code) && len == total && is_base64url_nopad(text) {
-            return Ok(Some(Parsed::new(
-                &format!("CESR {label}"),
-                BASE64URL,
-                None,
-                text.to_string(),
-                None,
-            )));
+    if let Some(items) = items {
+        for &(code, label, total) in items {
+            if text.starts_with(code) && len == total && is_base64url_nopad(text) {
+                return Ok(Some(Parsed::new(
+                    &format!("CESR {label}"),
+                    BASE64URL,
+                    None,
+                    text.to_string(),
+                    None,
+                )));
+            }
+        }
+    }
+    // Matter did not match — try the Indexer table (indexed signatures).
+    // Deliberately AFTER Matter so (code, length) decides Matter-vs-Indexer,
+    // never the leading char alone. Match keys on the hard code + full size
+    // only; the variable index chars are left in the core. See this.i:idxs1gs0.
+    if INDEXER.iter().any(|x| x.2 == len) {
+        for &(hard, label, fs) in INDEXER {
+            if len == fs && text.starts_with(hard) && is_base64url_nopad(text) {
+                return Ok(Some(Parsed::new(
+                    &format!("CESR {label}"),
+                    BASE64URL,
+                    None,
+                    text.to_string(),
+                    None,
+                )));
+            }
         }
     }
     Ok(None)
@@ -1665,6 +1723,77 @@ mod tests {
         let four = format!("1AAA{}", "A".repeat(44)); // 48 chars total
         let p = parse_cesr(&four).unwrap().unwrap();
         assert_eq!(p.type_name, "CESR secp256k1 nt pubkey");
+    }
+
+    // Issue #36 — the CESR recognizer must cover the Indexer table (indexed
+    // signatures) and the Dater (datetime, Matter 1AAG), instead of dropping
+    // them to the base64url `raw` fallback. Vectors are authoritative — generated
+    // from keripy 1.1.33 (`Siger`/`Dater`), hardcoded so the test has no keripy
+    // dependency. See this.i:idxs1gs0. (qb64, expected CESR label) — one per
+    // length class and per algorithm, small + big variants.
+    const INDEXED_SIGS: &[(&str, &str)] = &[
+        // small (hs1/hs2), fs 88 / 156
+        ("ABCfhtCBiEx9ZZov6qDFWtAVn4bQgYhMfWWaL-qgxVrQFZ-G0IGITH1lmi_qoMVa0BWfhtCBiEx9ZZov6qDFWtAV", "Ed25519 idx sig"),
+        ("BDCfhtCBiEx9ZZov6qDFWtAVn4bQgYhMfWWaL-qgxVrQFZ-G0IGITH1lmi_qoMVa0BWfhtCBiEx9ZZov6qDFWtAV", "Ed25519 idx sig"),
+        ("CCCfhtCBiEx9ZZov6qDFWtAVn4bQgYhMfWWaL-qgxVrQFZ-G0IGITH1lmi_qoMVa0BWfhtCBiEx9ZZov6qDFWtAV", "secp256k1 idx sig"),
+        ("EFCfhtCBiEx9ZZov6qDFWtAVn4bQgYhMfWWaL-qgxVrQFZ-G0IGITH1lmi_qoMVa0BWfhtCBiEx9ZZov6qDFWtAV", "secp256r1 idx sig"),
+        ("0ACCAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5", "Ed448 idx sig"),
+        // big (hs2), fs 92 / 160
+        ("2AAFAFCfhtCBiEx9ZZov6qDFWtAVn4bQgYhMfWWaL-qgxVrQFZ-G0IGITH1lmi_qoMVa0BWfhtCBiEx9ZZov6qDFWtAV", "Ed25519 idx sig"),
+        ("2CABABCfhtCBiEx9ZZov6qDFWtAVn4bQgYhMfWWaL-qgxVrQFZ-G0IGITH1lmi_qoMVa0BWfhtCBiEx9ZZov6qDFWtAV", "secp256k1 idx sig"),
+        ("2EAHAHCfhtCBiEx9ZZov6qDFWtAVn4bQgYhMfWWaL-qgxVrQFZ-G0IGITH1lmi_qoMVa0BWfhtCBiEx9ZZov6qDFWtAV", "secp256r1 idx sig"),
+        ("3AAADAADAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5", "Ed448 idx sig"),
+    ];
+    // keri.core.coring.Dater(dts="2020-08-22T17:50:09.988921+00:00").qb64
+    const DATER: &str = "1AAG2020-08-22T17c50c09d988921p00c00";
+
+    #[test]
+    fn issue36_indexed_sigs_recognized_not_raw() {
+        for &(qb64, label) in INDEXED_SIGS {
+            let p = parse_cesr(qb64)
+                .unwrap()
+                .unwrap_or_else(|| panic!("indexed sig fell through to raw: {qb64}"));
+            assert_eq!(p.type_name, format!("CESR {label}"), "{qb64}");
+            // The derivation code + index stay IN the core (rendered in cells and
+            // hashed); nothing is split to prefix.
+            assert!(p.prefix.is_none());
+            assert_eq!(p.core, qb64);
+        }
+    }
+
+    #[test]
+    fn issue36_indexed_sigs_dispatch_via_parse() {
+        for &(qb64, label) in INDEXED_SIGS {
+            let p = parse(qb64).unwrap().unwrap();
+            assert_eq!(p.type_name, format!("CESR {label}"));
+        }
+    }
+
+    #[test]
+    fn issue36_matter_vs_indexer_disambiguation_by_length() {
+        // A 44-char 'A...' is the Matter Ed25519 SEED; an 88-char 'A...' is the
+        // Indexer signature. Length must decide, not the leading char alone.
+        let seed = format!("A{}", "A".repeat(43)); // 44 chars
+        assert_eq!(
+            parse_cesr(&seed).unwrap().unwrap().type_name,
+            "CESR Ed25519 seed"
+        );
+        let sig = INDEXED_SIGS[0].0;
+        assert_eq!(sig.chars().count(), 88);
+        assert!(sig.starts_with('A'));
+        assert_eq!(
+            parse_cesr(sig).unwrap().unwrap().type_name,
+            "CESR Ed25519 idx sig"
+        );
+    }
+
+    #[test]
+    fn issue36_dater_recognized_not_raw() {
+        let p = parse_cesr(DATER)
+            .unwrap()
+            .expect("Dater fell through to raw");
+        assert_eq!(p.type_name, "CESR datetime");
+        assert_eq!(p.core, DATER);
     }
 
     // ===================================================================
