@@ -451,13 +451,26 @@ fn parse_bitcoin_address(text: &str) -> PResult {
             Some(c) if c == 1 || c == 0x2bc830a3 => {}
             _ => return Err(ParseError::Bech32Checksum),
         }
-        return Ok(Some(Parsed::new(
-            "BTC SegWit",
-            BECH32,
-            Some(prefix.to_lowercase()),
-            body.to_lowercase(),
-            None,
-        )));
+        // v16: the HRP is identity (`bc1` mainnet vs `tb1` testnet), bound by
+        // prefix-fold; the 6-char checksum leaves the core and becomes the
+        // shown suffix, as every other verified checksum already does. Until
+        // v16 this parser kept the checksum inside the core, which bound the
+        // HRP only by accident — moving it out without folding would have made
+        // bc1 and tb1 collide. See docs/spec.md "The bech32 HRP is identity".
+        let body = body.to_lowercase();
+        let bchars: Vec<char> = body.chars().collect();
+        let core: String = bchars[..bchars.len() - 6].iter().collect();
+        let suffix: String = bchars[bchars.len() - 6..].iter().collect();
+        return Ok(Some(
+            Parsed::new(
+                "BTC SegWit",
+                BECH32,
+                Some(prefix.to_lowercase()),
+                core,
+                Some(suffix),
+            )
+            .semantic(),
+        ));
     }
     Ok(None)
 }
@@ -584,13 +597,22 @@ fn parse_litecoin_address(text: &str) -> PResult {
             Some(c) if c == 1 || c == 0x2bc830a3 => {}
             _ => return Err(ParseError::Bech32Checksum),
         }
-        return Ok(Some(Parsed::new(
-            "LTC",
-            BECH32,
-            Some(prefix.to_lowercase()),
-            body.to_lowercase(),
-            None,
-        )));
+        // v16: same treatment as Bitcoin segwit above — fold the identity HRP,
+        // move the verified checksum out of the core and into the suffix.
+        let body = body.to_lowercase();
+        let bchars: Vec<char> = body.chars().collect();
+        let core: String = bchars[..bchars.len() - 6].iter().collect();
+        let suffix: String = bchars[bchars.len() - 6..].iter().collect();
+        return Ok(Some(
+            Parsed::new(
+                "LTC",
+                BECH32,
+                Some(prefix.to_lowercase()),
+                core,
+                Some(suffix),
+            )
+            .semantic(),
+        ));
     }
     Ok(None)
 }
@@ -625,6 +647,19 @@ fn parse_bitcoin_cash_address(text: &str) -> PResult {
                 if !cashaddr_verify(&hrp, &full_body) {
                     return Err(ParseError::CashAddrChecksum);
                 }
+                // v16 EXCEPTION — CashAddr is deliberately NOT folded, and
+                // keeps its 8-char checksum inside the core. Two reasons, in
+                // order of weight. (1) It is not vulnerable: the checksum
+                // covers the prefix and lives in the core, so `bitcoincash:X`
+                // and `bchtest:X` already have different cores. That is the
+                // same accidental binding v16 removes from segwit — but here
+                // removing it has a cost the other parsers do not pay. (2) The
+                // CashAddr prefix is OPTIONAL (a bare `q…`/`p…` body defaults
+                // to `bitcoincash`), so folding the literal prefix would make a
+                // bare address and its prefixed spelling — the same address —
+                // fingerprint differently, while folding a synthesized
+                // canonical prefix would put text in `parts` the user never
+                // typed. See docs/spec.md "CashAddr is the one exception".
                 return Ok(Some(Parsed::new(
                     "BCH",
                     BECH32,
@@ -634,6 +669,70 @@ fn parse_bitcoin_cash_address(text: &str) -> PResult {
                 )));
             }
         }
+    }
+    Ok(None)
+}
+
+/// Cardano. Mirrors `entropy.py:parse_cardano_address`.
+///
+/// * Byron `Ae2…` / `DdzFF…` (base58): NO trailing base58check field — Byron's
+///   integrity check is a CRC-32 over the CBOR *inside* the decoded payload —
+///   so per the v14 "only surface a VERIFIED checksum" rule the whole body is
+///   the core and `suffix` is `None`. We do not attempt CBOR/CRC-32
+///   verification (out of scope), so a Byron address is not rejected here.
+/// * Shelley `addr1…`/`stake1…`/`addr_test1…` (bech32): the polymod is verified
+///   and a bad checksum REJECTS; the 6-char checksum is the suffix. **v16**: the
+///   HRP is identity — `addr1` mainnet vs `addr_test1` testnet over one payload
+///   were byte-identical entvizes before the fold, and a payment vs a stake
+///   address differ the same way — so it binds by prefix-fold.
+///
+/// The prefix alternation is case-SENSITIVE (the reference regex carries no
+/// `re.I`); only the bech32/base58 body is matched in either case.
+fn parse_cardano_address(text: &str) -> PResult {
+    // Byron short: ^(Ae2)base58{50}base58{6}$ ; long: ^(DdzFF)base58{65}base58{6}$
+    for (prefix, body_len) in [("Ae2", 50usize), ("DdzFF", 65usize)] {
+        if let Some(rest) = text.strip_prefix(prefix) {
+            if rest.chars().count() == body_len + 6 && is_base58(rest) {
+                return Ok(Some(Parsed::new(
+                    "ADA Byron",
+                    BASE58,
+                    Some(prefix.to_string()),
+                    rest.to_string(),
+                    None,
+                )));
+            }
+        }
+    }
+    // Shelley: ^((?:addr|stake)(?:_test)?1)(bech32{50,100})(bech32{6})$
+    for hrp in ["addr_test1", "stake_test1", "addr1", "stake1"] {
+        let Some(rest) = text.strip_prefix(hrp) else {
+            continue;
+        };
+        let n = rest.chars().count();
+        // group(2) is greedy {50,100} and group(3) is exactly 6, so the body
+        // (data + checksum) is 56..=106 characters and the split is fixed.
+        if !(56..=106).contains(&n) || !is_bech32_either(rest) {
+            continue;
+        }
+        let data = rest.to_lowercase();
+        // The polymod HRP is the human-readable part WITHOUT the '1' separator.
+        match bech32_checksum_const(hrp.trim_end_matches('1'), &data) {
+            Some(c) if c == 1 || c == 0x2bc830a3 => {}
+            _ => return Err(ParseError::Bech32Checksum),
+        }
+        let dchars: Vec<char> = data.chars().collect();
+        let core: String = dchars[..dchars.len() - 6].iter().collect();
+        let suffix: String = dchars[dchars.len() - 6..].iter().collect();
+        return Ok(Some(
+            Parsed::new(
+                "ADA Shelley",
+                BECH32,
+                Some(hrp.to_string()),
+                core,
+                Some(suffix),
+            )
+            .semantic(),
+        ));
     }
     Ok(None)
 }
@@ -1121,13 +1220,23 @@ fn parse_bech32_address(text: &str) -> PResult {
                 let dchars: Vec<char> = data.chars().collect();
                 let core: String = dchars[..dchars.len() - 6].iter().collect();
                 let suffix: String = dchars[dchars.len() - 6..].iter().collect();
-                return Ok(Some(Parsed::new(
-                    "bech32",
-                    BECH32,
-                    Some(format!("{hrp}1")),
-                    core,
-                    Some(suffix),
-                )));
+                // v16: `<hrp>1` is IDENTITY-BEARING and binds by prefix-fold.
+                // The same data payload under a different HRP denotes a
+                // different value — a different chain, a different network, or
+                // a nostr `npub` vs `nsec` — and the HRP is not in the bech32
+                // alphabet (`b`, `i`, `o`, `1` are all excluded), so it cannot
+                // ride in the core. See docs/spec.md "The bech32 HRP is
+                // identity, and folds (v16)".
+                return Ok(Some(
+                    Parsed::new(
+                        "bech32",
+                        BECH32,
+                        Some(format!("{hrp}1")),
+                        core,
+                        Some(suffix),
+                    )
+                    .semantic(),
+                ));
             }
             _ => return Err(ParseError::Bech32Checksum),
         }
@@ -1332,7 +1441,7 @@ const PARSERS: &[ParserFn] = &[
     parse_ethereum_address,
     parse_litecoin_address,
     parse_bitcoin_cash_address,
-    // parse_cardano_address omitted (not in corpus; bech32 generic covers none of it)
+    parse_cardano_address,
     parse_stellar_address,
     parse_uuid,
     parse_ulid,
@@ -1968,6 +2077,168 @@ mod tests {
         assert!(parse_bitcoin_cash_address(&format!("z{}", "q".repeat(41)))
             .unwrap()
             .is_none());
+    }
+
+    // ===================================================================
+    // v16: the bech32 HRP is identity-bearing and binds the fingerprint.
+    //
+    // Through v15 the HRP was validated by the polymod and then dropped, so two
+    // values sharing a data payload under different HRPs had identical parse
+    // output. These assert the three pieces of the v16 fix at the parse layer:
+    // the fold flag on every bech32 path, the checksum living in the SUFFIX on
+    // every bech32 path (segwit and Litecoin alone kept it in the core), and
+    // the deliberate CashAddr exception.
+    // ===================================================================
+    #[test]
+    fn v16_bech32_checksum_is_the_suffix_on_every_path() {
+        for entropy in [
+            "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4",
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
+            "ltc1qw508d6qejxtdg4y5r3zarvary0c5xw7kgmn4n9",
+            "cosmos1qqqsyqcyq5rqwzqfpg9scrgwpugpzysnrk363e",
+            "npub1802mpadp48s09v7y6hn0wzqe9ga5chtw07qfz23mf3wkuluqjy3swt0n8f",
+        ] {
+            let p = parse(entropy).unwrap().unwrap();
+            let suffix = p.suffix.as_deref().unwrap_or_else(|| panic!("{entropy}"));
+            assert_eq!(suffix.chars().count(), 6, "{entropy}");
+            assert!(entropy.ends_with(suffix), "{entropy}");
+            assert!(!p.core.ends_with(suffix), "{entropy}");
+            assert!(p.prefix_semantic, "{entropy}");
+        }
+    }
+
+    #[test]
+    fn v16_segwit_folds_the_hrp_and_splits_the_checksum() {
+        // Core = the address minus the `bc1` prefix AND minus the 6-char
+        // checksum, which v16 moved out of the core and into the suffix.
+        let p = parse("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4")
+            .unwrap()
+            .unwrap();
+        assert_eq!(p.type_name, "BTC SegWit");
+        assert_eq!(p.prefix.as_deref(), Some("bc1"));
+        assert_eq!(p.core, "qw508d6qejxtdg4y5r3zarvary0c5xw7k");
+        assert_eq!(p.suffix.as_deref(), Some("v8f3t4"));
+        assert!(p.prefix_semantic);
+        // The testnet spelling of the same payload: identical core, different
+        // prefix. Only the fold can now tell the two apart.
+        let t = parse("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx")
+            .unwrap()
+            .unwrap();
+        assert_eq!(t.core, p.core);
+        assert_ne!(t.prefix, p.prefix);
+    }
+
+    #[test]
+    fn v16_litecoin_bech32_folds_the_hrp_and_splits_the_checksum() {
+        let p = parse("ltc1qw508d6qejxtdg4y5r3zarvary0c5xw7kgmn4n9")
+            .unwrap()
+            .unwrap();
+        assert_eq!(p.type_name, "LTC");
+        assert_eq!(p.prefix.as_deref(), Some("ltc1"));
+        assert_eq!(p.core, "qw508d6qejxtdg4y5r3zarvary0c5xw7k");
+        assert_eq!(p.suffix.as_deref(), Some("gmn4n9"));
+        assert!(p.prefix_semantic);
+    }
+
+    #[test]
+    fn v16_generic_bech32_hrps_share_a_core_and_differ_only_in_the_prefix() {
+        // The premise of the whole change: nothing except the fold can
+        // distinguish these. If a parser change ever puts the HRP or the
+        // checksum into the core, this stops testing what it was written for.
+        for (a, b) in [
+            (
+                "cosmos1qqqsyqcyq5rqwzqfpg9scrgwpugpzysnrk363e",
+                "osmo1qqqsyqcyq5rqwzqfpg9scrgwpugpzysntdz28t",
+            ),
+            (
+                "npub1802mpadp48s09v7y6hn0wzqe9ga5chtw07qfz23mf3wkuluqjy3swt0n8f",
+                "nsec1802mpadp48s09v7y6hn0wzqe9ga5chtw07qfz23mf3wkuluqjy3szayjpu",
+            ),
+        ] {
+            let pa = parse(a).unwrap().unwrap();
+            let pb = parse(b).unwrap().unwrap();
+            assert_eq!(pa.core, pb.core, "{a} vs {b}");
+            assert_ne!(pa.prefix, pb.prefix, "{a} vs {b}");
+            assert!(pa.prefix_semantic && pb.prefix_semantic, "{a} vs {b}");
+        }
+    }
+
+    #[test]
+    fn v16_cardano_shelley_mainnet_and_testnet() {
+        let m = parse(
+            "addr1qyqqzqsrqszsvpcgpy9qkrqdpc83qygjzv2p29shrqv35xmyv4nxw6rfdf4kc\
+             mtwdac8zunnw36hvamc09a8klra0elsr0jfpr",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(m.type_name, "ADA Shelley");
+        assert_eq!(m.prefix.as_deref(), Some("addr1"));
+        assert_eq!(m.suffix.as_deref(), Some("r0jfpr"));
+        assert!(m.prefix_semantic);
+        let t = parse(
+            "addr_test1qyqqzqsrqszsvpcgpy9qkrqdpc83qygjzv2p29shrqv35xmyv4nxw6rfdf4kc\
+             mtwdac8zunnw36hvamc09a8klra0els30xwlp",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(t.prefix.as_deref(), Some("addr_test1"));
+        assert_eq!(t.core, m.core);
+        // A corrupted Shelley checksum rejects rather than falling through.
+        assert!(matches!(
+            parse(
+                "addr1qyqqzqsrqszsvpcgpy9qkrqdpc83qygjzv2p29shrqv35xmyv4nxw6rfdf4kc\
+                 mtwdac8zunnw36hvamc09a8klra0elsr0jfpq"
+            ),
+            Err(ParseError::Bech32Checksum)
+        ));
+    }
+
+    #[test]
+    fn cardano_byron_keeps_the_whole_body_in_the_core() {
+        // Byron has NO trailing base58check field (its integrity check is a
+        // CRC-32 over the CBOR inside the payload), so per the v14 rule the
+        // whole body is the core and there is no surfaced suffix.
+        let short = format!("Ae2{}", "1".repeat(56));
+        let p = parse_cardano_address(&short).unwrap().unwrap();
+        assert_eq!(p.type_name, "ADA Byron");
+        assert_eq!(p.prefix.as_deref(), Some("Ae2"));
+        assert_eq!(p.core.chars().count(), 56);
+        assert!(p.suffix.is_none());
+        assert!(!p.prefix_semantic);
+        let long = format!("DdzFF{}", "1".repeat(71));
+        assert_eq!(
+            parse_cardano_address(&long).unwrap().unwrap().core.len(),
+            71
+        );
+        // Wrong length -> no match (falls through to the next parser).
+        assert!(parse_cardano_address("Ae21234").unwrap().is_none());
+        // Shelley HRP but a body outside {56,106}, and a body with a character
+        // outside the bech32 charset ('b'): both fall through rather than
+        // committing to a bech32 match (so neither raises a checksum error).
+        assert!(parse_cardano_address("stake1qqqq").unwrap().is_none());
+        assert!(parse_cardano_address(&format!("addr1{}", "b".repeat(60)))
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn v16_cashaddr_is_the_documented_exception() {
+        // CashAddr is deliberately NOT folded: its prefix is optional, so a
+        // bare body and its prefixed spelling are the same address and must not
+        // diverge. It is safe unfolded because its 8-char checksum stays in the
+        // core and covers the prefix.
+        let bare = parse("qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a")
+            .unwrap()
+            .unwrap();
+        let prefixed = parse("bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a")
+            .unwrap()
+            .unwrap();
+        assert_eq!(bare.core, prefixed.core);
+        assert!(!bare.prefix_semantic);
+        assert!(!prefixed.prefix_semantic);
+        // The checksum stays INSIDE the core — it is not surfaced as a suffix.
+        assert!(prefixed.suffix.is_none());
+        assert!(prefixed.core.ends_with("vy22gdx6a"));
     }
 
     #[test]

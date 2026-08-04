@@ -384,6 +384,11 @@ fn describe_from_parsed(
 }
 
 /// Reading-order [{text, bind}] parts (Wrinkle 4). Mirrors `_parts_from_parsed`.
+///
+/// A folded identity prefix (did:/urn:/gitoid:/swh:, and from v16 the bech32
+/// `<hrp>1`; `prefix_semantic`) is `bind="fold"`; any other shown prefix
+/// (presentation framing: `0x`, `Qm`, `b`, `G`, `bitcoincash:`, the SSH
+/// structural header) is `bind="none"`.
 fn parts_from_parsed(parsed: &Parsed) -> Vec<Part> {
     let mut parts = Vec::new();
     if let Some(prefix) = &parsed.prefix {
@@ -493,15 +498,25 @@ const PREFIX_ELLIPSIS: &str = "...";
 const PREFIX_MIN_HEAD: usize = 4;
 
 /// The literal front prefix that was stripped from the visualized core, or
-/// `None`. A leading `bind="none"` part — a presentation sigil peeled off the
-/// front (`0x`, `bc1`, `cosmos1`, Stellar `G`, the SSH structural header, …).
-/// A folded identity prefix (`bind="fold"`: did/urn/gitoid/swhid) is NOT
-/// returned — it is already shown verbatim as the PRIMARY slot. A `bind="core"`
-/// leading part (a CESR derivation code, in the first cell) is likewise not a
-/// stripped prefix. So the slot fires iff `parts[0].bind == "none"`.
+/// `None`. A leading part bound `none` or `fold` — either a presentation sigil
+/// peeled off the front (`0x`, Stellar `G`, the SSH structural header, …) or a
+/// folded identity prefix (`did:key:`, `urn:isbn:`, `swh:1:cnt:`, and from v16
+/// the bech32 `cosmos1`/`bc1`/`addr1` HRP). Either way the cells do not begin at
+/// the character the reader pasted, so the label has to say what was removed.
+///
+/// The slot is dropped by the caller only when the PRIMARY slot *already*
+/// displays this prefix — the did/urn/gitoid/swhid case, where PRIMARY is
+/// literally `did:key` — so it is never shown twice and never lost. Before v16
+/// the rule was `bind="none"` only, which was equivalent while every folded
+/// prefix was also the PRIMARY; folding the bech32 HRP breaks that coincidence,
+/// because a Cosmos address's PRIMARY is `bech32` and the HRP would otherwise
+/// vanish from the label entirely.
+///
+/// A `bind="core"` leading part (a CESR derivation code, in the first cell) is
+/// not a stripped prefix.
 fn stripped_prefix(ch: &Characterization) -> Option<&str> {
     match ch.parts.first() {
-        Some(p) if p.bind == "none" => Some(p.text.as_str()),
+        Some(p) if p.bind == "none" || p.bind == "fold" => Some(p.text.as_str()),
         _ => None,
     }
 }
@@ -696,10 +711,11 @@ fn size(ch: &Characterization) -> Option<String> {
 ///   no trailing `:`. The `+hash ` marker is prepended when `truncated`; the
 ///   renderer splits it back out to style it. The trailing `<prefix>` slot
 ///   Echoes a front prefix that was stripped from the visualized core (a
-///   `bind="none"` leading part) so the reader can reconcile the pasted value
-///   against the cells; it is the only slot that may be truncated and may then
-///   end in `...`. Fold-prefix schemes (did/urn/gitoid/swhid) show their prefix
-///   as PRIMARY and get no extra slot.
+///   `bind="none"` or `bind="fold"` leading part) so the reader can reconcile
+///   the pasted value against the cells; it is the only slot that may be
+///   truncated and may then end in `...`. The slot is dropped only when PRIMARY
+///   already displays that exact prefix (did/urn/gitoid/swhid), which is why a
+///   folded bech32 HRP still shows: `bech32, cosmos1`, `BTC, bc1`.
 /// * `bottom` = `...<suffix>` then ` (<note>)` — the bound (now-verified)
 ///   checksum and the user caption. Empty string when neither is present.
 ///
@@ -719,7 +735,14 @@ pub fn render_label(
         slots.push(sz);
     }
 
-    if let Some(prefix) = stripped_prefix(ch) {
+    // v16: drop the slot only when the PRIMARY slot already displays this
+    // prefix verbatim (did:key, urn:isbn, swh:1:cnt, gitoid:blob:sha256).
+    // Showing it again would double it. A folded bech32 HRP does NOT match its
+    // PRIMARY (`bech32`, `BTC`, `ADA`), so it stays — the fold puts the HRP in
+    // the fingerprint and never in the cells, which makes the label its only
+    // text carrier.
+    let shown_prefix = stripped_prefix(ch).filter(|p| p.trim_end_matches(':') != slots[0]);
+    if let Some(prefix) = shown_prefix {
         let prefix = match line_chars {
             Some(budget) => {
                 // Budget left for the prefix = the line budget minus the marker
@@ -1294,6 +1317,96 @@ mod tests {
                 "gitoid:blob:sha256:473a0f4c3be8a93681a267e3b1e9a7dcda1185436fe141f7749120a303721813"
             ),
             "gitoid:blob:sha256"
+        );
+    }
+
+    // ---- v16: a folded prefix that is NOT the PRIMARY still gets the slot ----
+    #[test]
+    fn v16_folded_bech32_hrp_still_reaches_the_label() {
+        // The fold puts the HRP in the fingerprint and never in the cells, so
+        // the label is its only text carrier. v15's rule ("a folded prefix is
+        // already the PRIMARY slot") would have deleted it outright, because a
+        // bech32 HRP's PRIMARY is the scheme name, not the HRP.
+        assert_eq!(
+            top_of("cosmos1qqqsyqcyq5rqwzqfpg9scrgwpugpzysnrk363e"),
+            "bech32, cosmos1"
+        );
+        assert_eq!(
+            top_of("osmo1qqqsyqcyq5rqwzqfpg9scrgwpugpzysntdz28t"),
+            "bech32, osmo1"
+        );
+        assert_eq!(
+            top_of("npub1802mpadp48s09v7y6hn0wzqe9ga5chtw07qfz23mf3wkuluqjy3swt0n8f"),
+            "bech32, npub1"
+        );
+        assert_eq!(
+            top_of("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"),
+            "BTC, bc1"
+        );
+        assert_eq!(
+            top_of("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx"),
+            "BTC, tb1"
+        );
+        assert_eq!(
+            top_of("ltc1qw508d6qejxtdg4y5r3zarvary0c5xw7kgmn4n9"),
+            "LTC, ltc1"
+        );
+    }
+
+    #[test]
+    fn v16_folded_prefix_equal_to_primary_is_still_dropped() {
+        // The exact test: drop the slot only when the prefix minus a trailing
+        // ':' equals PRIMARY. That is these four schemes and nothing else, so
+        // `did:key` is never doubled while `cosmos1` is never lost.
+        for entropy in [
+            "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+            "urn:isbn:0451450523",
+            "swh:1:rev:309cf2674ee7a0749978cf8265ab91a60aea0f7d",
+            "gitoid:blob:sha256:473a0f4c3be8a93681a267e3b1e9a7dcda1185436fe141f7749120a303721813",
+        ] {
+            let c = ch(entropy);
+            // The prefix IS returned by stripped_prefix now (v16 widened it to
+            // bind="fold"); it is render_label that drops the redundant slot.
+            let prefix = stripped_prefix(&c).unwrap();
+            assert_eq!(c.parts[0].bind, "fold", "{entropy}");
+            let top = top_of(entropy);
+            assert_eq!(prefix.trim_end_matches(':'), top, "{entropy}");
+            assert!(!top.contains(", "), "{entropy}");
+        }
+    }
+
+    #[test]
+    fn v16_cardano_shelley_characterization() {
+        let m = ch(
+            "addr1qyqqzqsrqszsvpcgpy9qkrqdpc83qygjzv2p29shrqv35xmyv4nxw6rfdf4kc\
+                    mtwdac8zunnw36hvamc09a8klra0elsr0jfpr",
+        );
+        assert_eq!(m.scheme.as_deref(), Some("ada"));
+        assert_eq!(m.role, Some(ROLE_ADDRESS));
+        assert_eq!(m.qualifiers.to_json(), "{\"variant\":\"shelley\"}");
+        assert_eq!(m.parts[0].bind, "fold");
+        assert_eq!(m.parts[0].text, "addr1");
+        assert_eq!(render_label(&m, false, None, None, None).0, "ADA, addr1");
+        let t = ch(
+            "addr_test1qyqqzqsrqszsvpcgpy9qkrqdpc83qygjzv2p29shrqv35xmyv4nxw6rfdf4kc\
+                    mtwdac8zunnw36hvamc09a8klra0els30xwlp",
+        );
+        assert_eq!(
+            render_label(&t, false, None, None, None).0,
+            "ADA, addr_test1"
+        );
+    }
+
+    #[test]
+    fn v16_cashaddr_prefix_is_presentation_not_fold() {
+        // The one deliberate exception: BCH keeps bind="none" on its prefix and
+        // its checksum inside the core, so the slot still shows for the reason
+        // it always did (a stripped presentation sigil), not as a fold.
+        let c = ch("bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a");
+        assert_eq!(c.parts[0].bind, "none");
+        assert_eq!(
+            render_label(&c, false, None, None, None).0,
+            "BCH, bitcoincash:"
         );
     }
 

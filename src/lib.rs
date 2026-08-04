@@ -24,7 +24,7 @@ use base64::Engine;
 use sha2::{Digest, Sha512};
 use std::collections::BTreeMap;
 
-pub const SPEC_VERSION: &str = "v15";
+pub const SPEC_VERSION: &str = "v16";
 
 pub mod characterize;
 pub mod entropy;
