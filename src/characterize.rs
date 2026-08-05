@@ -280,8 +280,25 @@ fn describe_from_parsed(
 
     // --- Blockchain addresses ---
     if type_name.starts_with("BTC") {
-        q.push_str("network", "mainnet");
+        // v17: the network is READ FROM THE PREFIX, not assumed. Through v16
+        // this was a hardcoded "mainnet", so a testnet address labeled exactly
+        // like a mainnet one — `mods` shows the network only on departure, so
+        // the loud `testnet` marker the v14 rule requires never appeared.
+        // Signals: segwit `bc1` mainnet / `tb1` testnet; legacy base58 version
+        // byte `1` (P2PKH) and `3` (P2SH) mainnet, `m`/`n` (P2PKH) and `2`
+        // (P2SH) testnet. Key order (network before variant) is preserved from
+        // v16 so the serialized `data-qualifiers` ordering does not change for
+        // mainnet. See `this.i:n3twrkq`. (`parse_bitcoin_address` emits exactly
+        // two type names, "BTC SegWit" and "BTC legacy", so the non-segwit arm
+        // is the legacy one.)
         let low = type_name.to_lowercase();
+        let pfx = prefix.map(|p| p.to_lowercase()).unwrap_or_default();
+        let is_testnet = if low.contains("segwit") {
+            pfx.starts_with("tb")
+        } else {
+            matches!(pfx.chars().next(), Some('m') | Some('n') | Some('2'))
+        };
+        q.push_str("network", if is_testnet { "testnet" } else { "mainnet" });
         if low.contains("legacy") {
             q.push_str("variant", "legacy");
         } else if low.contains("segwit") {
@@ -297,7 +314,13 @@ fn describe_from_parsed(
         return (Some("bch".into()), Some(ROLE_ADDRESS), q, "decoded");
     }
     if type_name.starts_with("LTC") {
-        q.push_str("network", "mainnet");
+        // v17: as for BTC. The only testnet form this parser recognizes is the
+        // legacy `tL…`; the bech32 branch matches `ltc1` alone, so it is always
+        // mainnet (note `ltc1` also starts with `l`, not `t`).
+        let is_testnet = prefix
+            .map(|p| p.to_lowercase().starts_with('t'))
+            .unwrap_or(false);
+        q.push_str("network", if is_testnet { "testnet" } else { "mainnet" });
         if type_name.to_lowercase().contains("legacy") {
             q.push_str("variant", "legacy");
         }
@@ -305,8 +328,21 @@ fn describe_from_parsed(
     }
     if type_name.starts_with("ADA") {
         if type_name.contains("Byron") {
+            // No network qualifier for Byron, deliberately. A Byron address's
+            // network magic lives inside the CBOR-encoded payload, which this
+            // parser does not decode — the same reason its CRC-32 goes
+            // unverified (see docs/spec.md "Checksum verification"). Claiming a
+            // network we cannot read would be a guess.
             q.push_str("variant", "byron");
         } else if type_name.contains("Shelley") {
+            // v17: Shelley states its network in the prefix — `addr1`/`stake1`
+            // are mainnet, `addr_test1`/`stake_test1` testnet. Through v16 no
+            // network qualifier was emitted at all, so a testnet address was
+            // indistinguishable from mainnet in both the model and the label.
+            let is_testnet = prefix
+                .map(|p| p.to_lowercase().contains("_test"))
+                .unwrap_or(false);
+            q.push_str("network", if is_testnet { "testnet" } else { "mainnet" });
             q.push_str("variant", "shelley");
         }
         return (Some("ada".into()), Some(ROLE_ADDRESS), q, "decoded");
@@ -1343,9 +1379,12 @@ mod tests {
             top_of("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"),
             "BTC, bc1"
         );
+        // v17: the network is derived from the prefix, so testnet is now loud —
+        // through v16 this read "BTC, tb1", identical to its mainnet twin's
+        // label but for the small prefix slot. See `this.i:n3twrkq`.
         assert_eq!(
             top_of("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx"),
-            "BTC, tb1"
+            "BTC, testnet, tb1"
         );
         assert_eq!(
             top_of("ltc1qw508d6qejxtdg4y5r3zarvary0c5xw7kgmn4n9"),
@@ -1383,7 +1422,13 @@ mod tests {
         );
         assert_eq!(m.scheme.as_deref(), Some("ada"));
         assert_eq!(m.role, Some(ROLE_ADDRESS));
-        assert_eq!(m.qualifiers.to_json(), "{\"variant\":\"shelley\"}");
+        // v17: Shelley now carries a network qualifier, derived from the prefix
+        // (`addr1` mainnet vs `addr_test1` testnet). Through v16 it carried
+        // none at all, so the testnet label below read "ADA, addr_test1".
+        assert_eq!(
+            m.qualifiers.to_json(),
+            "{\"network\":\"mainnet\",\"variant\":\"shelley\"}"
+        );
         assert_eq!(m.parts[0].bind, "fold");
         assert_eq!(m.parts[0].text, "addr1");
         assert_eq!(render_label(&m, false, None, None, None).0, "ADA, addr1");
@@ -1392,8 +1437,12 @@ mod tests {
                     mtwdac8zunnw36hvamc09a8klra0els30xwlp",
         );
         assert_eq!(
+            t.qualifiers.to_json(),
+            "{\"network\":\"testnet\",\"variant\":\"shelley\"}"
+        );
+        assert_eq!(
             render_label(&t, false, None, None, None).0,
-            "ADA, addr_test1"
+            "ADA, testnet, addr_test1"
         );
     }
 

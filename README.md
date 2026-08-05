@@ -6,19 +6,19 @@
 [![docs.rs](https://docs.rs/entviz/badge.svg)](https://docs.rs/entviz)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-Rust implementation of [entviz](https://github.com/dhh1128/entviz) (spec **v16**)
+Rust implementation of [entviz](https://github.com/dhh1128/entviz) (spec **v17**)
 — visualize high-entropy values as comparable SVG diagrams.
 
 ## Part of the entviz family
 
 entviz is defined by a language-independent [specification](https://github.com/dhh1128/entviz/blob/main/docs/spec.md), with conformant implementations in Python (reference), Rust, TypeScript/JS + React, Java, and Go — all passing the same shared conformance corpus. See the **[directory of implementations](https://github.com/dhh1128/entviz#implementations)**, browse the [spec & docs site](https://dhh1128.github.io/entviz/), or **[try it live in the browser](https://dhh1128.github.io/entviz-js/)**.
 
-## Status: certified against the v16 conformance corpus ✅
+## Status: certified against the v17 conformance corpus ✅
 
 A full, self-contained implementation that passes the shared conformance corpus
 at **Tier A** (render model) **+ Tier B** (canonical raster) for every render
 vector, rejects every error vector, and satisfies every invariant pair
-(**99/99** checks in the v16 corpus). What's here:
+(**104/104** checks in the v17 corpus). What's here:
 
 - **`src/lib.rs`** — the deterministic shared core: alphabets, tokenization +
   24-bit quant extension, the SHA-512 fingerprint (via `sha2`), ftok

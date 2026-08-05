@@ -703,15 +703,27 @@ fn parse_cardano_address(text: &str) -> PResult {
             }
         }
     }
-    // Shelley: ^((?:addr|stake)(?:_test)?1)(bech32{50,100})(bech32{6})$
+    // Shelley: ^((?:addr|stake)(?:_test)?1)(bech32{45,100})(bech32{6})$
+    //
+    // v17: the body floor was 50, which silently excluded EVERY 29-byte Shelley
+    // address — reward/stake (`stake1…`) and enterprise — since 29 bytes is 47
+    // bech32 characters ahead of the 6-char checksum. Those fell through to the
+    // generic bech32 parser and typed as `bech32` rather than `ada`; worse,
+    // their testnet forms did not parse as bech32 at all, because `stake_test`
+    // contains `_`, outside the generic parser's `[a-z]` HRP charset, so they
+    // landed on the base64url disproof fallback with no scheme and no checksum
+    // verification. The floor is now 45: a 57-byte base address is 91
+    // characters and a 29-byte one is 47, so both fit with margin. Widening is
+    // safe because the prefix alternation is anchored and this parser still
+    // runs before the generic bech32 one. See `this.i:sh3lley29`.
     for hrp in ["addr_test1", "stake_test1", "addr1", "stake1"] {
         let Some(rest) = text.strip_prefix(hrp) else {
             continue;
         };
         let n = rest.chars().count();
-        // group(2) is greedy {50,100} and group(3) is exactly 6, so the body
-        // (data + checksum) is 56..=106 characters and the split is fixed.
-        if !(56..=106).contains(&n) || !is_bech32_either(rest) {
+        // group(2) is greedy {45,100} and group(3) is exactly 6, so the body
+        // (data + checksum) is 51..=106 characters and the split is fixed.
+        if !(51..=106).contains(&n) || !is_bech32_either(rest) {
             continue;
         }
         let data = rest.to_lowercase();
@@ -2212,7 +2224,7 @@ mod tests {
         );
         // Wrong length -> no match (falls through to the next parser).
         assert!(parse_cardano_address("Ae21234").unwrap().is_none());
-        // Shelley HRP but a body outside {56,106}, and a body with a character
+        // Shelley HRP but a body outside {51,106}, and a body with a character
         // outside the bech32 charset ('b'): both fall through rather than
         // committing to a bech32 match (so neither raises a checksum error).
         assert!(parse_cardano_address("stake1qqqq").unwrap().is_none());
