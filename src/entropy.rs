@@ -99,8 +99,11 @@ pub enum ParseError {
     /// does not verify. The checksum is surfaced as the bottom-strip
     /// suffix, so a structural match with a bad checksum REJECTS.
     Base58Check,
-    /// A bech32 address (BTC segwit `bc1`, LTC `ltc1`, Cardano Shelley, generic
-    /// cosmos) whose BIP-173/BIP-350 polymod does not verify; rejected.
+    /// A NAMED bech32 address (BTC segwit `bc1`/`tb1`, LTC `ltc1`, Cardano
+    /// Shelley `addr1`/`stake1`) whose BIP-173/BIP-350 polymod does not verify;
+    /// rejected. v17 correction: the GENERIC `<hrp>1<data>` path no longer
+    /// raises this — with no registry of valid HRPs a failing polymod means
+    /// only "not bech32 after all", so it declines. See `this.i:b3ch32fl`.
     Bech32Checksum,
     /// A CashAddr (Bitcoin Cash) whose 40-bit BCH polymod does not verify.
     CashAddrChecksum,
@@ -1192,10 +1195,20 @@ fn bech32_checksum_const(hrp: &str, data: &str) -> Option<u32> {
 }
 
 fn parse_bech32_address(text: &str) -> PResult {
-    // ^([a-z]{1,83})1(bech32{8,})$  case-insensitive; checksum valid
+    // ^([a-z]{1,83})1(bech32{32,})$  case-insensitive; checksum valid
     // Find the LAST '1' as separator? The regex is greedy on hrp [a-z]{1,83}
-    // then literal '1' then bech32{8,}. Python re is greedy, so hrp matches as
-    // many [a-z] as possible before a '1' that still leaves >=8 bech32 chars.
+    // then literal '1' then bech32{32,}. Python re is greedy, so hrp matches as
+    // many [a-z] as possible before a '1' that still leaves >=32 bech32 chars.
+    //
+    // v17 correction: the data floor was 8, which made the structural match a
+    // claim this parser could not support. Measured before the change, 34 of
+    // 3000 random short hex strings (~1.1%) matched `<letters>1<8+ bech32>` by
+    // accident and were REJECTED outright on the failing polymod — ordinary
+    // values entviz simply would not render. A real bech32 payload is 20+
+    // bytes, so its data part (payload + the 6-char checksum) is comfortably
+    // over 32 characters; the corpus Cosmos vector has 38. Like the Python
+    // regex's group(2), `data` below INCLUDES the 6-char checksum, so the
+    // bound translates across unchanged. See `this.i:b3ch32fl`.
     let low = text.to_lowercase();
     let chars: Vec<char> = low.chars().collect();
     // hrp must be letters; find separator positions where char=='1'.
@@ -1210,10 +1223,9 @@ fn parse_bech32_address(text: &str) -> PResult {
     // greedy hrp => prefer the LARGEST separator index that satisfies the
     // structural constraints. The Python anchored regex commits to that single
     // greedy split; we mirror it — the first structurally-valid split is the
-    // match, and its checksum then decides accept vs REJECT (a `<hrp>1<8+
-    // bech32>` string is a clear bech32 structural match, and the 6-char
-    // checksum is surfaced as the bound suffix, so an invalid polymod rejects
-    // rather than falling through to a bare encoding).
+    // match, and its checksum then decides accept vs DECLINE (v17 correction:
+    // on this generic path a failing polymod falls through instead of
+    // rejecting; see the branch below).
     for &sep in sep_candidates.iter().rev() {
         if !(1..=83).contains(&sep) {
             continue;
@@ -1223,7 +1235,7 @@ fn parse_bech32_address(text: &str) -> PResult {
             continue;
         }
         let data: String = chars[sep + 1..].iter().collect();
-        if data.chars().count() < 8 || !all_in(&data, BECH32_CHARS) {
+        if data.chars().count() < 32 || !all_in(&data, BECH32_CHARS) {
             continue;
         }
         // Structural match committed (greedy). Validate the checksum.
@@ -1250,7 +1262,28 @@ fn parse_bech32_address(text: &str) -> PResult {
                     .semantic(),
                 ));
             }
-            _ => return Err(ParseError::Bech32Checksum),
+            // v17 correction: FALL THROUGH, do not reject.
+            //
+            // v14 rejected here, reasoning that "a `<hrp>1<data>` string with
+            // 8+ bech32 chars is a clear bech32 structural match", so a failing
+            // polymod meant a corrupted address and rendering one would
+            // mislead. The premise was false: the shape is not distinctive, and
+            // the rejection refused ordinary values outright (~1.1% of random
+            // short hex strings, measured).
+            //
+            // Rejection is only sound when the match is unambiguous. It stays
+            // for the NAMED schemes — bc1/tb1, ltc1, addr1/stake1,
+            // bitcoincash:/bchtest: — where the prefix really is a strong
+            // signal and v14's reasoning holds. Here there is no registry of
+            // valid HRPs by design, so a failing checksum means only "this is
+            // not bech32 after all": return None and let the input continue to
+            // the next parser and the alphabet ladder. It still never renders
+            // AS an address — the label reads `hex`/`base58`, not `bech32,
+            // cosmos1`, so a reader sees that recognition did not happen.
+            // Mirroring Python, the greedy split is committed, so this declines
+            // the whole parser rather than retrying a shorter HRP.
+            // See `this.i:b3ch32fl` and docs/spec.md "Checksum verification".
+            _ => return Ok(None),
         }
     }
     Ok(None)
@@ -2469,12 +2502,48 @@ mod tests {
         assert_eq!(p.prefix.as_deref(), Some("cosmos1"));
         // no separator '1' -> no match
         assert!(parse_bech32_address("cosmosqqqq").unwrap().is_none());
-        // A `<hrp>1<8+ bech32>` structural match with a bad checksum now
-        // REJECTS (previously fell through to Ok(None)).
-        assert!(matches!(
-            parse_bech32_address("cosmos1qqqsyqcyq5rqwzqfpg9scrgwpugpzysnrk363f"),
-            Err(ParseError::Bech32Checksum)
-        ));
+        // v17 correction, reversing the v14 rule ON THIS PATH ONLY: a
+        // `<hrp>1<data>` match with a bad polymod DECLINES rather than
+        // rejecting. With no registry of valid HRPs the shape alone is not a
+        // sound claim, and the old rule refused ~1.1% of random short hex
+        // strings. The NAMED schemes (bc1/tb1, ltc1, addr1, bitcoincash:) still
+        // reject. See `this.i:b3ch32fl`.
+        assert!(
+            parse_bech32_address("cosmos1qqqsyqcyq5rqwzqfpg9scrgwpugpzysnrk363f")
+                .unwrap()
+                .is_none()
+        );
+        // ...and the whole-parser path renders it as a bare encoding, never AS
+        // an address: the label says what was actually recognized.
+        assert_ne!(
+            parse("cosmos1qqqsyqcyq5rqwzqfpg9scrgwpugpzysnrk363f")
+                .unwrap()
+                .unwrap()
+                .type_name,
+            "bech32"
+        );
+        // v17 correction: the data floor is 32 characters INCLUDING the 6-char
+        // checksum, so a bech32-shaped short hex string is no longer claimed by
+        // this parser at all — it parses as hex.
+        assert!(parse_bech32_address("dee1ad37cf96").unwrap().is_none());
+        assert_eq!(parse("dee1ad37cf96").unwrap().unwrap().type_name, "hex");
+        // The floor is on the data part INCLUDING its 6-char checksum, the
+        // same frame as the Python regex's group(2). These two differ only in
+        // length and both carry a VALID polymod, so they isolate the bound from
+        // the fall-through above: 31 characters declines, 32 matches.
+        assert!(parse_bech32_address("ab1qqqqqqqqqqqqqqqqqqqqqqqqqcv3wq8")
+            .unwrap()
+            .is_none());
+        let at_floor = parse_bech32_address("ab1qqqqqqqqqqqqqqqqqqqqqqqqqq8yz5d0")
+            .unwrap()
+            .unwrap();
+        assert_eq!(at_floor.type_name, "bech32");
+        assert_eq!(at_floor.core.chars().count() + 6, 32);
+        // The corpus Cosmos vector's data part is 38, comfortably over.
+        assert_eq!(
+            "cosmos1qqqsyqcyq5rqwzqfpg9scrgwpugpzysnrk363e".len() - "cosmos1".len(),
+            38
+        );
     }
 
     // ===================================================================
