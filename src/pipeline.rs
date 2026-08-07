@@ -43,9 +43,18 @@ pub enum RenderError {
     Eip55 {
         position: usize,
     },
-    /// A bound checksum was surfaced (base58check / bech32 / CashAddr / LEI) but
-    /// did not verify. The variant identifies which scheme's checksum
-    /// failed; the input is rejected rather than rendered with a bad checksum.
+    /// A bound checksum was surfaced but did not verify, on an input carrying an
+    /// EXPLICIT multi-character scheme marker — `bc1`/`tb1`, `ltc1`,
+    /// `addr1`/`stake1`/`addr_test1`, or a *typed* `bitcoincash:`/`bchtest:`.
+    /// There the failure means "this IS that scheme, and it is corrupt", so the
+    /// input is rejected rather than rendered with a bad checksum.
+    ///
+    /// v17 correction 2 (`this.i:w3aksig`): a weak signal — a leading character,
+    /// a length band, a reserved digit pair — no longer reaches here at all. The
+    /// parser declines instead and the input renders as a bare encoding. So
+    /// `Base58Check` and `LeiChecksum` are now unreachable in practice; they are
+    /// retained so the surfaced error catalog stays stable across
+    /// implementations. See [`crate::entropy::ParseError`].
     Base58Check,
     Bech32Checksum,
     CashAddrChecksum,

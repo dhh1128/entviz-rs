@@ -91,24 +91,47 @@ impl Parsed {
     }
 }
 
+/// A failing checksum rejects only when the input carries an EXPLICIT,
+/// multi-character scheme marker — `bc1`/`tb1`, `ltc1`, `addr1`/`stake1`/
+/// `addr_test1`, a *typed* `bitcoincash:`/`bchtest:`, or `0x` plus exactly 40
+/// hex for EIP-55. There the failure means "this IS that scheme, and it is
+/// corrupt". Where the only signal is a leading character, a length band, or a
+/// reserved digit pair, a failure means only "not that scheme", so the parser
+/// DECLINES (`Ok(None)`) and the input continues to the next recognizer and the
+/// alphabet ladder. See `this.i:w3aksig` and docs/spec.md "Checksum
+/// verification".
 #[derive(Debug)]
 pub enum ParseError {
     /// EIP-55 mixed-case Ethereum checksum mismatch (`position` = first bad hex).
+    /// `0x` plus exactly 40 hex characters is an explicit marker, so this rejects.
     Eip55 { position: usize },
-    /// A base58check body (BTC/LTC legacy) whose 4-byte double-SHA256 checksum
-    /// does not verify. The checksum is surfaced as the bottom-strip
-    /// suffix, so a structural match with a bad checksum REJECTS.
+    /// A base58check body whose 4-byte double-SHA256 checksum does not verify.
+    ///
+    /// v17 correction 2 (`this.i:w3aksig`): NO parser raises this any more. Both
+    /// paths that did — Bitcoin legacy (one leading char from `[123mn]` plus a
+    /// length band) and Litecoin legacy (`L`/`tL` plus a fixed length) — carry
+    /// only a weak signal, so they now decline instead. The variant is retained
+    /// so the surfaced error catalog stays stable across implementations.
     Base58Check,
     /// A NAMED bech32 address (BTC segwit `bc1`/`tb1`, LTC `ltc1`, Cardano
-    /// Shelley `addr1`/`stake1`) whose BIP-173/BIP-350 polymod does not verify;
-    /// rejected. v17 correction: the GENERIC `<hrp>1<data>` path no longer
-    /// raises this — with no registry of valid HRPs a failing polymod means
-    /// only "not bech32 after all", so it declines. See `this.i:b3ch32fl`.
+    /// Shelley `addr1`/`stake1`/`addr_test1`) whose BIP-173/BIP-350 polymod does
+    /// not verify; rejected, because the prefix is an explicit marker. The
+    /// GENERIC `<hrp>1<data>` path does NOT raise this — with no registry of
+    /// valid HRPs a failing polymod means only "not bech32 after all", so it
+    /// declines. See `this.i:b3ch32fl`.
     Bech32Checksum,
-    /// A CashAddr (Bitcoin Cash) whose 40-bit BCH polymod does not verify.
+    /// A CashAddr (Bitcoin Cash) whose 40-bit BCH polymod does not verify AND
+    /// whose `bitcoincash:`/`bchtest:` prefix was TYPED. A bare `q…`/`p…` body
+    /// carries no marker, so it declines instead: CashAddr splits on the input,
+    /// not the parser. See `this.i:w3aksig`.
     CashAddrChecksum,
     /// A 20-char LEI (with the reserved `00`) whose MOD 97-10 check digits do
-    /// not verify; rejected rather than falling through to a bare base36.
+    /// not verify.
+    ///
+    /// v17 correction 2 (`this.i:w3aksig`): no parser raises this any more. The
+    /// reserved pair lands by chance in 1 of 1296 random 20-char base36 strings,
+    /// so it is a weak signal and the parser declines. Retained for catalog
+    /// stability.
     LeiChecksum,
 }
 
@@ -426,11 +449,17 @@ fn parse_bitcoin_address(text: &str) -> PResult {
                 let mid: String = bchars[..bchars.len() - 4].iter().collect();
                 let suf: String = bchars[bchars.len() - 4..].iter().collect();
                 if (21..=30).contains(&mid.chars().count()) {
-                    // The 4-byte double-SHA256 checksum is surfaced as the
-                    // suffix, so it MUST verify. A structural match with a bad
-                    // checksum rejects.
+                    // v17 correction 2 (`this.i:w3aksig`): DECLINE, do not
+                    // reject. The only signal here is ONE leading character
+                    // from [123mn] plus a length band — far too weak to claim
+                    // the scheme. Measured, this path refused ~2% of random
+                    // short values outright. Rejection is reserved for inputs
+                    // carrying an explicit multi-character scheme marker (bc1,
+                    // ltc1, addr1, bitcoincash:, 0x+EIP-55), where a failed
+                    // check really does mean "this IS that scheme, and it is
+                    // corrupt".
                     if !base58check_ok(text) {
-                        return Err(ParseError::Base58Check);
+                        return Ok(None);
                     }
                     return Ok(Some(Parsed::new(
                         "BTC legacy",
@@ -575,10 +604,10 @@ fn parse_litecoin_address(text: &str) -> PResult {
     for prefix in ["tL", "L"] {
         if let Some(rest) = text.strip_prefix(prefix) {
             if rest.chars().count() == 33 && is_base58(rest) {
-                // Litecoin legacy is base58check; verify the double-SHA256
-                // checksum — a bad checksum rejects.
+                // v17 correction 2 (`this.i:w3aksig`): decline. `L`/`tL` plus a
+                // fixed length is a weak signal, same as Bitcoin legacy above.
                 if !base58check_ok(text) {
-                    return Err(ParseError::Base58Check);
+                    return Ok(None);
                 }
                 return Ok(Some(Parsed::new(
                     "LTC legacy",
@@ -643,11 +672,23 @@ fn parse_bitcoin_cash_address(text: &str) -> PResult {
                 // from bech32's polymod). The checksum HRP is the prefix WITHOUT
                 // the colon, defaulting to "bitcoincash" for a bare q…/p… address;
                 // the payload (INCLUDING its 8 trailing checksum chars) is the
-                // whole `rest`. A structural match with a bad checksum rejects.
+                // whole `rest`.
+                //
+                // v17 correction 2 (`this.i:w3aksig`): the verdict on a bad
+                // checksum depends on whether the input CARRIED the prefix. An
+                // explicit `bitcoincash:`/`bchtest:` is an unambiguous marker,
+                // so a failure there is a corrupt address and still REJECTS. A
+                // bare `q…`/`p…` body is a single leading character plus a
+                // length — too weak to claim, so it declines like the other
+                // weak-signal paths.
+                let explicit = prefix.is_some();
                 let hrp = prefix
                     .map(|p| p.trim_end_matches(':').to_lowercase())
                     .unwrap_or_else(|| "bitcoincash".to_string());
                 if !cashaddr_verify(&hrp, &full_body) {
+                    if !explicit {
+                        return Ok(None);
+                    }
                     return Err(ParseError::CashAddrChecksum);
                 }
                 // v16 EXCEPTION — CashAddr is deliberately NOT folded, and
@@ -894,11 +935,12 @@ fn parse_lei(text: &str) -> PResult {
         return Ok(None);
     }
     if !lei_checksum_ok(&upper) {
-        // 20 base36 chars WITH the reserved "00" is an unambiguous LEI
-        // match, and the MOD 97-10 check digits are surfaced as the bound
-        // suffix — so a bad checksum REJECTS rather than falling through to a
-        // generic base36 encoding.
-        return Err(ParseError::LeiChecksum);
+        // v17 correction 2 (`this.i:w3aksig`): decline. v14 called "20 base36
+        // chars WITH the reserved 00" an unambiguous LEI match. It is not — the
+        // reserved pair lands by chance in 1 of 1296 random 20-char base36
+        // strings, and this path was refusing real values. The signal is a
+        // length plus two characters, not an explicit scheme marker.
+        return Ok(None);
     }
     Ok(Some(Parsed::new(
         "LEI",
@@ -2019,7 +2061,9 @@ mod tests {
     #[test]
     fn bitcoin_legacy_and_segwit() {
         // Addresses must carry a VALID checksum to parse (real corpus
-        // vectors), and a structural match with a bad checksum is rejected.
+        // vectors). A structural match with a bad checksum is REJECTED on the
+        // segwit path, whose `bc1`/`tb1` is an explicit marker, and DECLINED on
+        // the legacy path, whose leading [123mn] is not.
         let legacy = parse_bitcoin_address("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa")
             .unwrap()
             .unwrap();
@@ -2030,11 +2074,12 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(segwit.type_name, "BTC SegWit");
-        // Legacy structural match, corrupted last checksum char -> reject.
-        assert!(matches!(
-            parse_bitcoin_address("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNb"),
-            Err(ParseError::Base58Check)
-        ));
+        // Legacy structural match, corrupted last checksum char -> DECLINE.
+        // v17 correction 2 (`this.i:w3aksig`): one leading char from [123mn]
+        // plus a length band is too weak a signal to reject on.
+        assert!(parse_bitcoin_address("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNb")
+            .unwrap()
+            .is_none());
         // Segwit structural match, corrupted checksum -> reject.
         assert!(matches!(
             parse_bitcoin_address("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t5"),
@@ -2076,11 +2121,11 @@ mod tests {
             .unwrap();
         assert_eq!(legacy.type_name, "LTC legacy");
         assert_eq!(legacy.prefix.as_deref(), Some("L"));
-        // Corrupted checksum on the legacy path -> reject.
-        assert!(matches!(
-            parse_litecoin_address("LKDyUEtTR1HXamkiEphisSiBJu6o3ZPE3a"),
-            Err(ParseError::Base58Check)
-        ));
+        // Corrupted checksum on the legacy path -> DECLINE (v17 correction 2):
+        // `L`/`tL` plus a fixed length is a weak signal.
+        assert!(parse_litecoin_address("LKDyUEtTR1HXamkiEphisSiBJu6o3ZPE3a")
+            .unwrap()
+            .is_none());
         // ltc1 bech32 (corpus vector).
         let bech = parse("ltc1qw508d6qejxtdg4y5r3zarvary0c5xw7kgmn4n9")
             .unwrap()
@@ -2113,11 +2158,24 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(bare.prefix.is_none());
-        // A structural CashAddr match with a corrupted checksum -> reject.
+        // v17 correction 2 (`this.i:w3aksig`): CashAddr splits on the INPUT, not
+        // the parser. A TYPED prefix is an explicit marker, so a corrupted
+        // checksum there still rejects...
         assert!(matches!(
             parse_bitcoin_cash_address("bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6q"),
             Err(ParseError::CashAddrChecksum)
         ));
+        assert!(matches!(
+            parse_bitcoin_cash_address("bchtest:qpur7lcrzhq247gvqs5n79hj0tz4edmdqg09nfandq"),
+            Err(ParseError::CashAddrChecksum)
+        ));
+        // ...while the SAME body with no prefix carries only a leading `q` plus
+        // a length, so it declines and the input continues down the chain.
+        assert!(
+            parse_bitcoin_cash_address("qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6q")
+                .unwrap()
+                .is_none()
+        );
         // wrong leading char
         assert!(parse_bitcoin_cash_address(&format!("z{}", "q".repeat(41)))
             .unwrap()
@@ -2371,11 +2429,17 @@ mod tests {
         // wrong length
         assert!(parse_lei("549300").unwrap().is_none());
         // Valid structure (reserved "00" present) but bad MOD 97-10 check
-        // digits -> REJECT (previously fell through to a bare base36 encoding).
-        assert!(matches!(
-            parse_lei("5493001KJTIIGC8Y1R99"),
-            Err(ParseError::LeiChecksum)
-        ));
+        // digits -> DECLINE. v17 correction 2 (`this.i:w3aksig`) reverses v14
+        // here: the reserved pair lands by chance in 1 of 1296 random 20-char
+        // base36 strings, so it cannot carry a rejection.
+        assert!(parse_lei("5493001KJTIIGC8Y1R99").unwrap().is_none());
+        assert!(parse_lei("5493001KJTIIGC8Y1R13").unwrap().is_none());
+        // ...and it still never renders AS an LEI: the label reports the
+        // encoding actually recognized.
+        assert_ne!(
+            parse("5493001KJTIIGC8Y1R13").unwrap().unwrap().type_name,
+            "LEI"
+        );
     }
 
     #[test]
