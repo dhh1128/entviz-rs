@@ -1432,6 +1432,11 @@ fn multicodec_content(code: u64) -> Option<&'static str> {
     })
 }
 
+/// The multihash hash-function table, byte-for-byte the same set of codes as
+/// `MULTIHASH_HASH_FUNCS` in entropy.py. Previously this held only the nine
+/// codes the CID vectors happened to exercise, which was a latent divergence:
+/// a CID (or, since 0.17.3, a hex multihash) carrying any other code parsed in
+/// the reference and fell through here.
 fn multihash_func(code: u64) -> Option<&'static str> {
     Some(match code {
         0x11 => "sha1",
@@ -1441,10 +1446,103 @@ fn multihash_func(code: u64) -> Option<&'static str> {
         0x15 => "sha3-256",
         0x16 => "sha3-384",
         0x17 => "sha3-512",
+        0x18 => "shake-128",
+        0x19 => "shake-256",
+        0x1a => "keccak-224",
         0x1b => "keccak-256",
+        0x1c => "keccak-384",
+        0x1d => "keccak-512",
+        0x22 => "blake2b-8",
+        0x23 => "blake2b-16",
+        0x24 => "blake2b-24",
+        0x25 => "blake2b-32",
+        0x26 => "blake2b-40",
+        0x27 => "blake2b-48",
+        0x28 => "blake2b-56",
+        0x29 => "blake2b-64",
+        0x2a => "blake2b-72",
+        0x2b => "blake2b-80",
+        0x2c => "blake2b-88",
+        0x2d => "blake2b-96",
+        0x2e => "blake2b-104",
+        0x2f => "blake2b-112",
+        0x30 => "blake2b-120",
+        0x31 => "blake2b-128",
+        0x32 => "blake2b-136",
+        0x33 => "blake2b-144",
+        0x34 => "blake2b-152",
+        0x35 => "blake2b-160",
+        0x36 => "blake2b-168",
+        0x37 => "blake2b-176",
+        0x38 => "blake2b-184",
+        0x39 => "blake2b-192",
+        0x3a => "blake2b-200",
+        0x3b => "blake2b-208",
+        0x3c => "blake2b-216",
+        0x3d => "blake2b-224",
+        0x3e => "blake2b-232",
+        0x3f => "blake2b-240",
+        0x40 => "blake2b-248",
         0x41 => "blake2b-256",
+        0xb201 => "dbl-sha2-256",
+        0xb202 => "murmur3-128",
+        0xb203 => "murmur3-32",
         _ => return None,
     })
+}
+
+/// Mirrors `_parse_multihash` in entropy.py: a raw multihash is a one-byte
+/// hash-function code, a one-byte digest length, and exactly that many digest
+/// bytes. Returns `(label, prefix_bytes, digest_bytes)`. sha2-256 is the
+/// near-universal default and is elided from the label; any other function is
+/// named.
+fn multihash_parts(bytes: &[u8]) -> Option<(String, &[u8], &[u8])> {
+    if bytes.len() < 3 {
+        return None;
+    }
+    let hash_func = multihash_func(bytes[0] as u64)?;
+    let hash_length = bytes[1] as usize;
+    if bytes.len() != hash_length + 2 {
+        return None;
+    }
+    let label = if hash_func == "sha2-256" {
+        "multihash".to_string()
+    } else {
+        format!("multihash {hash_func}")
+    };
+    Some((label, &bytes[..2], &bytes[2..]))
+}
+
+/// Mirrors `parse_hex_multihash` in entropy.py. Runs FIRST in the dispatch
+/// chain so a hex-encoded multihash is recognized before the generic hex
+/// parser claims it; the 2-byte header is a `none`-bind prefix and only the
+/// digest is core.
+fn parse_hex_multihash(text: &str) -> PResult {
+    let n = text.chars().count();
+    if n < 6 {
+        return Ok(None);
+    }
+    // Even length first: an odd-length all-hex string is not a byte string,
+    // and the generic parse_hex (which checks parity itself) gets it instead.
+    if !n.is_multiple_of(2) {
+        return Ok(None);
+    }
+    if !is_hex(text) {
+        return Ok(None);
+    }
+    let Ok(bytes) = hex::decode(text) else {
+        return Ok(None);
+    };
+    match multihash_parts(&bytes) {
+        Some((label, prefix, core)) => Ok(Some(Parsed::new(
+            &format!("hex {label}"),
+            HEX,
+            Some(hex::encode(prefix)),
+            hex::encode(core),
+            None,
+        ))),
+        None => Ok(None),
+    }
 }
 
 fn parse_hex(text: &str) -> PResult {
@@ -1519,8 +1617,10 @@ fn eos_regex(text: &str) -> bool {
 type ParserFn = fn(&str) -> PResult;
 
 const PARSERS: &[ParserFn] = &[
-    // parse_hex_multihash is not exercised by the corpus and is omitted; the
-    // remaining order matches entropy.py's parse_funcs (incl. parse_did/parse_urn).
+    // Order matches entropy.py's parse_funcs (incl. parse_did/parse_urn).
+    // parse_hex_multihash must stay first: it is the narrowest pure-hex form,
+    // and parse_hex would otherwise swallow it.
+    parse_hex_multihash,
     parse_cesr,
     parse_ssh_key,
     parse_bitcoin_address,
@@ -2626,6 +2726,50 @@ mod tests {
     }
 
     #[test]
+    fn hex_multihash_splits_the_two_byte_header() {
+        // Corpus vector `multihash-sha256-hex` (added in entviz 0.17.3): 0x12
+        // sha2-256, 0x20 = 32 digest bytes. The header is a none-bind prefix,
+        // only the digest is core, and sha2-256 is elided from the label.
+        let p = parse("1220b1674191a88ec5cdd733e4240a81803105dc412d6c6708d53ab94fc248f4f553")
+            .unwrap()
+            .unwrap();
+        assert_eq!(p.type_name, "hex multihash");
+        assert_eq!(p.prefix.as_deref(), Some("1220"));
+        assert_eq!(
+            p.core,
+            "b1674191a88ec5cdd733e4240a81803105dc412d6c6708d53ab94fc248f4f553"
+        );
+        assert_eq!(p.alphabet.name, "hex");
+    }
+
+    #[test]
+    fn hex_multihash_non_default_hash_is_named_and_near_misses_fall_through() {
+        // A non-sha2-256 function is named in the label: 0x15 sha3-256, 0x20 len.
+        let p = parse("1520b1674191a88ec5cdd733e4240a81803105dc412d6c6708d53ab94fc248f4f553")
+            .unwrap()
+            .unwrap();
+        assert_eq!(p.type_name, "hex multihash sha3-256");
+
+        // Declared length that disagrees with the payload is not a multihash;
+        // it falls through to the generic hex parser with no prefix split.
+        let bad = parse("121fb1674191a88ec5cdd733e4240a81803105dc412d6c6708d53ab94fc248f4f553")
+            .unwrap()
+            .unwrap();
+        assert_eq!(bad.type_name, "hex");
+        assert_eq!(bad.prefix, None);
+
+        // Unknown hash-function code, odd length, and too-short input: all None.
+        assert!(parse_hex_multihash(
+            "ff20b1674191a88ec5cdd733e4240a81803105dc412d6c6708d53ab94fc248f4f553"
+        )
+        .unwrap()
+        .is_none());
+        assert!(parse_hex_multihash("1220b").unwrap().is_none());
+        assert!(parse_hex_multihash("1220").unwrap().is_none());
+        assert!(parse_hex_multihash("zzzzzz").unwrap().is_none());
+    }
+
+    #[test]
     fn b32_decode_multicodec_direct() {
         let body = "afybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi";
         let (codec, hash) = b32_decode_multicodec(body).unwrap();
@@ -2662,8 +2806,12 @@ mod tests {
             (0x15, "sha3-256"),
             (0x16, "sha3-384"),
             (0x17, "sha3-512"),
+            (0x18, "shake-128"),
             (0x1b, "keccak-256"),
+            (0x22, "blake2b-8"),
             (0x41, "blake2b-256"),
+            (0xb201, "dbl-sha2-256"),
+            (0xb203, "murmur3-32"),
         ];
         for (code, name) in hashes {
             assert_eq!(multihash_func(code), Some(name));
