@@ -18,7 +18,8 @@ entviz is defined by a language-independent [specification](https://github.com/d
 A full, self-contained implementation that passes the shared conformance corpus
 at **Tier A** (render model) **+ Tier B** (canonical raster) for every render
 vector, rejects every error vector, and satisfies every invariant pair
-(**104/104** checks in the v17 corpus). What's here:
+(**109/109** checks in the v17 corpus: 92 render vectors, 9 error vectors,
+7 invariant pairs, and the spec-version match). What's here:
 
 - **`src/lib.rs`** — the deterministic shared core: alphabets, tokenization +
   24-bit quant extension, the SHA-512 fingerprint (via `sha2`), ftok
@@ -44,7 +45,7 @@ cargo build --release --bin entviz-conformance
 # from a checkout of the entviz reference repo (sibling ../entviz):
 PYTHONPATH=src:. python -m compliance.runner \
   --impl-cmd '/path/to/entviz-rs/target/release/entviz-conformance'
-# -> 52/52 vectors passed
+# -> 109/109 vectors passed
 ```
 
 `cargo test` also runs a corpus-driven smoke test (`tests/conformance.rs`) that
