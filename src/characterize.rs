@@ -412,6 +412,25 @@ fn describe_from_parsed(
         );
     }
     if type_name.contains("multihash") {
+        // v18: surface the hash function so the MOD slot can render it. The
+        // parser has always recovered the name — `Parsed.type_name` reads
+        // "hex multihash sha3-256" — and this function threw it away, so the
+        // `mods` branch that reads `q["hash"]` could never fire and a
+        // non-default multihash labeled identically to a sha2-256 one. The v14
+        // rule has required "a multihash hash on departure" since v14; the
+        // reference simply never honored it (`this.i:mh4shnam`).
+        //
+        // It also made the 48-entry `multihash_func` table UNOBSERVABLE: a port
+        // could get every entry wrong and still pass Tier A, because the
+        // lookup's result never reached the model. sha2-256 is the silent
+        // default and the parser does not append it, so its qualifier stays
+        // absent.
+        if let Some((_, tail)) = type_name.split_once("multihash") {
+            let tail = tail.trim();
+            if !tail.is_empty() {
+                q.push_str("hash", tail);
+            }
+        }
         return (Some("multihash".into()), Some(ROLE_DIGEST), q, "decoded");
     }
 

@@ -6,19 +6,19 @@
 [![docs.rs](https://docs.rs/entviz/badge.svg)](https://docs.rs/entviz)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-Rust implementation of [entviz](https://github.com/dhh1128/entviz) (spec **v17**)
+Rust implementation of [entviz](https://github.com/dhh1128/entviz) (spec **v18**)
 — visualize high-entropy values as comparable SVG diagrams.
 
 ## Part of the entviz family
 
 entviz is defined by a language-independent [specification](https://github.com/dhh1128/entviz/blob/main/docs/spec.md), with conformant implementations in Python (reference), Rust, TypeScript/JS + React, Java, and Go — all passing the same shared conformance corpus. See the **[directory of implementations](https://github.com/dhh1128/entviz#implementations)**, browse the [spec & docs site](https://dhh1128.github.io/entviz/), or **[try it live in the browser](https://dhh1128.github.io/entviz-js/)**.
 
-## Status: certified against the v17 conformance corpus ✅
+## Status: certified against the v18 conformance corpus ✅
 
 A full, self-contained implementation that passes the shared conformance corpus
 at **Tier A** (render model) **+ Tier B** (canonical raster) for every render
 vector, rejects every error vector, and satisfies every invariant pair
-(**109/109** checks in the v17 corpus: 92 render vectors, 9 error vectors,
+(**113/113** checks in the v18 corpus: 96 render vectors, 9 error vectors,
 7 invariant pairs, and the spec-version match). What's here:
 
 - **`src/lib.rs`** — the deterministic shared core: alphabets, tokenization +
@@ -45,7 +45,7 @@ cargo build --release --bin entviz-conformance
 # from a checkout of the entviz reference repo (sibling ../entviz):
 PYTHONPATH=src:. python -m compliance.runner \
   --impl-cmd '/path/to/entviz-rs/target/release/entviz-conformance'
-# -> 109/109 vectors passed
+# -> 113/113 vectors passed
 ```
 
 `cargo test` also runs a corpus-driven smoke test (`tests/conformance.rs`) that

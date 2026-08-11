@@ -1433,10 +1433,17 @@ fn multicodec_content(code: u64) -> Option<&'static str> {
 }
 
 /// The multihash hash-function table, byte-for-byte the same set of codes as
-/// `MULTIHASH_HASH_FUNCS` in entropy.py. Previously this held only the nine
-/// codes the CID vectors happened to exercise, which was a latent divergence:
-/// a CID (or, since 0.17.3, a hex multihash) carrying any other code parsed in
-/// the reference and fell through here.
+/// `MULTIHASH_HASH_FUNCS` in entropy.py — 48 entries, verified against the
+/// reference entry by entry rather than by remembered size. Previously this
+/// held only the nine codes the CID vectors happened to exercise, which was a
+/// latent divergence: a CID (or, since 0.17.3, a hex multihash) carrying any
+/// other code parsed in the reference and fell through here.
+///
+/// Until v18 that divergence was undetectable, because `characterize()`
+/// discarded the name this returns and no rendered artifact changed when an
+/// entry was wrong. `tests/v18_multihash_hash_qualifier.rs` now drives every
+/// one of the 48 through a rendered label, which is the only reason the table
+/// is certified rather than trusted (`this.i:mh4shnam`).
 fn multihash_func(code: u64) -> Option<&'static str> {
     Some(match code {
         0x11 => "sha1",
